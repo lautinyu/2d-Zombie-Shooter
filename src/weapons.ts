@@ -32,6 +32,8 @@ export interface Weapon {
   pellets: number
   spread: number
   tracerWidth: number
+  /** Fraction of damage a pellet keeps at the very end of its flight. */
+  falloff?: number
 }
 
 export const RADAR_AXES: { key: keyof RadarStats; label: string }[] = [
@@ -88,7 +90,7 @@ export const WEAPONS: Weapon[] = [
   {
     id: 'viper-smg',
     name: 'Viper SMG',
-    price: 450,
+    price: 500,
     color: '#4ade80',
     perk: 'acidic-spray',
     perkName: 'Acidic Spray',
@@ -109,28 +111,29 @@ export const WEAPONS: Weapon[] = [
   {
     id: 'hellfire-shotgun',
     name: 'Hellfire Shotgun',
-    price: 700,
+    price: 620,
     color: '#fb923c',
     perk: 'dragons-breath',
     perkName: "Dragon's Breath",
     perkDescription: 'Wide blast cone with a 30% chance per pellet to ignite and slow Plague Bugs.',
-    description: 'Eight-pellet cone that shreds anything at close range.',
+    description: 'Five-pellet blast cone: lethal point blank, weak at distance.',
     radar: { damage: 5, fireRate: 2, reloadSpeed: 2, ammoCapacity: 2, range: 1 },
-    damage: 20,
+    damage: 34,
     fireInterval: 0.62,
     reloadTime: 1.9,
     magSize: 8,
     reserveStart: 64,
     bulletSpeed: 760,
-    bulletLife: 0.32,
-    pellets: 8,
-    spread: 0.34,
+    bulletLife: 0.42,
+    pellets: 5,
+    spread: 0.28,
     tracerWidth: 4,
+    falloff: 0.3,
   },
   {
     id: 'titan-sniper',
     name: 'Titan Sniper',
-    price: 900,
+    price: 750,
     color: '#60a5fa',
     perk: 'armor-piercing',
     perkName: 'Armor Piercing',
@@ -142,7 +145,7 @@ export const WEAPONS: Weapon[] = [
     reloadTime: 2.1,
     magSize: 5,
     reserveStart: 40,
-    bulletSpeed: 1600,
+    bulletSpeed: 2600,
     bulletLife: 1.6,
     pellets: 1,
     spread: 0.005,

@@ -1,6 +1,8 @@
 import type { Mission } from './missions'
 import type { Weapon } from './weapons'
 import { weaponById } from './weapons'
+import type { Character } from './characters'
+import { characterById } from './characters'
 import { SCRAP_PER_BUG, SCRAP_PER_KILL } from './profile'
 import { playShot } from './audio'
 import type { Zone } from './world'
@@ -42,6 +44,9 @@ interface Enemy {
   baseSpeed: number
   poison: number
   burn: number
+  vision: number
+  aware: boolean
+  driftAngle: number
 }
 
 interface Bullet {
@@ -57,6 +62,9 @@ interface Bullet {
   color: string
   width: number
   hit: Set<Enemy>
+  maxLife: number
+  falloff: number
+  tracerLength: number
 }
 
 interface AmmoBox {
@@ -83,11 +91,17 @@ export interface Hud {
   weaponName: string
   perkName: string
   scrap: number
+  characterName: string
 }
 
 export type DeathCause = 'wounds' | 'infection'
 
 const PLAYER_RADIUS = 16
+const PLAYER_BASE_SPEED = 260
+const ZOMBIE_VISION = 620
+const BUG_VISION = 780
+/** Awareness is kept until the player breaks well past the spotting range. */
+const VISION_HYSTERESIS = 1.5
 const MAX_STINGS = 5
 const POISON_DURATION = 3
 const POISON_DPS = 14
@@ -109,6 +123,7 @@ export class Game {
   scrapEarned = 0
   deathCause: DeathCause = 'wounds'
   weapon: Weapon = weaponById('rusty-pistol')
+  character: Character = characterById('nature-lover')
 
   private player: Player = this.makePlayer(0, 0)
   private enemies: Enemy[] = []
@@ -154,7 +169,7 @@ export class Game {
       r: PLAYER_RADIUS,
       hp: 100,
       maxHp: 100,
-      speed: 260,
+      speed: PLAYER_BASE_SPEED,
       angle: 0,
       hurtCooldown: 0,
     }
@@ -205,9 +220,10 @@ export class Game {
     return window.innerHeight
   }
 
-  startMission(mission: Mission, weapon: Weapon) {
+  startMission(mission: Mission, weapon: Weapon, character: Character) {
     this.mission = mission
     this.weapon = weapon
+    this.character = character
     this.kills = 0
     this.scrapEarned = 0
     this.shotsFired = 0
@@ -226,6 +242,7 @@ export class Game {
 
     const spawn = this.playerSpawnPoint(zoneById(mission.zone))
     this.player = this.makePlayer(spawn.x, spawn.y)
+    this.player.speed = PLAYER_BASE_SPEED * character.speedMultiplier
     this.setState('playing')
     this.start()
   }
@@ -287,6 +304,7 @@ export class Game {
       weaponName: this.weapon.name,
       perkName: this.weapon.perk === 'none' ? '' : this.weapon.perkName,
       scrap: this.scrapEarned,
+      characterName: this.character.name,
     })
   }
 
@@ -351,7 +369,7 @@ export class Game {
   private startReload() {
     if (this.state !== 'playing') return
     if (this.reloadTimer > 0 || this.mag === this.weapon.magSize || this.reserve <= 0) return
-    this.reloadTimer = this.weapon.reloadTime
+    this.reloadTimer = this.weapon.reloadTime * this.character.reloadMultiplier
   }
 
   private updateWeapon(dt: number) {
@@ -395,6 +413,9 @@ export class Game {
         vx: Math.cos(a) * speed,
         vy: Math.sin(a) * speed,
         life: w.bulletLife,
+        maxLife: w.bulletLife,
+        falloff: w.falloff ?? 1,
+        tracerLength: w.perk === 'armor-piercing' ? 56 : w.pellets > 1 ? 10 : 18,
         damage: w.damage,
         pierce: w.perk === 'armor-piercing',
         poison: acidShot,
@@ -421,7 +442,8 @@ export class Game {
           if (b.hit.has(e)) continue
           if (Math.hypot(e.x - b.x, e.y - b.y) >= e.r + 2) continue
           b.hit.add(e)
-          e.hp -= b.damage
+          const travelled = 1 - b.life / b.maxLife
+          e.hp -= b.damage * (1 - (1 - b.falloff) * travelled)
           if (b.poison) e.poison = POISON_DURATION
           if (b.ignite && e.kind === 'bug' && Math.random() < IGNITE_CHANCE) e.burn = BURN_DURATION
           if (e.hp <= 0) this.killEnemy(j)
@@ -471,6 +493,20 @@ export class Game {
       const step = z.speed * dt
       const wob = Math.sin(z.wobble * 4) * 0.25
       z.retreat = Math.max(0, z.retreat - dt)
+
+      const sight = z.vision * this.character.aggroMultiplier
+      z.aware = z.aware ? d < sight * VISION_HYSTERESIS : d < sight
+      if (!z.aware) {
+        // Unaware enemies shamble aimlessly until the player is spotted.
+        z.driftAngle += (Math.random() - 0.5) * dt * 2
+        this.moveCircle(
+          z,
+          Math.cos(z.driftAngle) * step * 0.3,
+          Math.sin(z.driftAngle) * step * 0.3
+        )
+        continue
+      }
+
       const dir = z.retreat > 0 ? -1 : 1
       const ux = (dx / d) * dir
       const uy = (dy / d) * dir
@@ -540,6 +576,9 @@ export class Game {
       retreat: 0,
       poison: 0,
       burn: 0,
+      vision: ZOMBIE_VISION,
+      aware: false,
+      driftAngle: Math.random() * Math.PI * 2,
     }
   }
 
@@ -557,6 +596,9 @@ export class Game {
       retreat: 0,
       poison: 0,
       burn: 0,
+      vision: BUG_VISION,
+      aware: false,
+      driftAngle: Math.random() * Math.PI * 2,
     }
   }
 
@@ -617,7 +659,7 @@ export class Game {
       ctx.strokeStyle = b.color
       ctx.lineWidth = b.width
       ctx.lineCap = 'round'
-      const len = Math.min(18, Math.hypot(b.vx, b.vy) * 0.02)
+      const len = Math.min(b.tracerLength, Math.hypot(b.vx, b.vy) * 0.03)
       const nx = b.vx / (Math.hypot(b.vx, b.vy) || 1)
       const ny = b.vy / (Math.hypot(b.vx, b.vy) || 1)
       ctx.beginPath()
@@ -715,7 +757,7 @@ export class Game {
     const p = this.player
     ctx.beginPath()
     ctx.arc(p.x, p.y, p.r, 0, Math.PI * 2)
-    ctx.fillStyle = p.hurtCooldown > 0 ? '#ff8a8a' : '#3ddc84'
+    ctx.fillStyle = p.hurtCooldown > 0 ? '#ff8a8a' : this.character.color
     ctx.fill()
     ctx.strokeStyle = '#14532d'
     ctx.lineWidth = 3

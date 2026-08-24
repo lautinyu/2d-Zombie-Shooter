@@ -7,6 +7,8 @@ import { RadarChart } from './radar'
 import { WEAPONS, weaponById } from './weapons'
 import type { Weapon, WeaponId } from './weapons'
 import { loadProfile, missionReward, saveProfile } from './profile'
+import { CHARACTERS, characterById } from './characters'
+import type { CharacterId } from './characters'
 
 const app = document.querySelector<HTMLDivElement>('#app')
 if (!app) throw new Error('#app container missing')
@@ -56,6 +58,7 @@ app.innerHTML = `
           <span id="hud-scrap" class="font-mono text-xs font-bold text-yellow-300">+0 scrap</span>
         </div>
         <div id="hud-perk" class="mt-0.5 text-xs font-semibold text-sky-300"></div>
+        <div id="hud-character" class="mt-1 border-t border-white/10 pt-1 text-xs font-semibold text-emerald-300"></div>
       </div>
     </div>
 
@@ -79,7 +82,11 @@ app.innerHTML = `
         <button id="shop-btn" class="rounded-lg bg-yellow-500/15 px-6 py-2 text-sm font-bold text-yellow-300 ring-1 ring-yellow-400/40 hover:bg-yellow-500/25">Weapons Shop</button>
         <button id="locker-btn" class="rounded-lg bg-sky-500/15 px-6 py-2 text-sm font-bold text-sky-300 ring-1 ring-sky-400/40 hover:bg-sky-500/25">Locker</button>
       </div>
-      <div class="mt-3 text-center text-xs text-slate-400">Equipped: <span id="menu-equipped" class="font-semibold text-emerald-300">Rusty Pistol</span></div>
+      <div class="mt-3 text-center text-xs text-slate-400">
+        Equipped: <span id="menu-equipped" class="font-semibold text-emerald-300">Rusty Pistol</span>
+        · Survivor: <span id="menu-character" class="font-semibold text-amber-300">—</span>
+        <button id="character-btn" class="ml-2 rounded bg-white/10 px-2 py-0.5 font-semibold text-white hover:bg-white/20">Change</button>
+      </div>
       <div id="mission-list" class="mt-6 grid gap-4 sm:grid-cols-3"></div>
       <div class="mt-8 rounded-lg bg-white/5 p-4 text-xs text-slate-400 ring-1 ring-white/10">
         <span class="font-semibold text-slate-200">Controls:</span>
@@ -97,6 +104,18 @@ app.innerHTML = `
       <p class="mt-5 text-lg leading-relaxed text-slate-200">A mysterious plague has wiped out humanity. The virus doesn't spread by bites&mdash;it spreads from the skies. A mutated species of giant flying bugs carries the infection. Getting stung too many times injects enough venom to kill you and instantly turn you into a zombie.</p>
       <p class="mt-4 text-sm text-slate-400">Plague Bugs are small orange fliers, 1.5x faster than a zombie. Five stings is lethal &mdash; shoot them first.</p>
       <button id="lore-close" class="mt-8 rounded-lg bg-orange-500 px-8 py-3 text-lg font-bold text-orange-950 hover:bg-orange-400">Back to Menu</button>
+    </div>
+  </div>
+
+  <!-- Character select -->
+  <div id="characters" class="absolute inset-0 z-20 hidden items-center justify-center bg-slate-950/98 p-6">
+    <div class="w-full max-w-3xl">
+      <h2 class="text-center text-4xl font-black tracking-tight text-emerald-400">CHOOSE YOUR SURVIVOR</h2>
+      <p class="mt-2 text-center text-sm text-slate-400">Each survivor carries a passive that changes how the wasteland treats you.</p>
+      <div id="character-list" class="mt-8 grid gap-5 md:grid-cols-2"></div>
+      <div class="mt-6 text-center">
+        <button id="characters-close" class="hidden rounded-lg bg-white/10 px-8 py-3 text-sm font-bold text-white hover:bg-white/20">Back to Menu</button>
+      </div>
     </div>
   </div>
 
@@ -167,6 +186,7 @@ const winScreen = el('win')
 const loseScreen = el('lose')
 const loreScreen = el('lore')
 const arsenalScreen = el('arsenal')
+const characterScreen = el('characters')
 
 const game = new Game(canvas)
 const profile = loadProfile()
@@ -192,8 +212,56 @@ let currentMission: Mission = MISSIONS[0]
 
 function launch(m: Mission) {
   currentMission = m
-  game.startMission(m, weaponById(profile.equipped))
+  game.startMission(m, weaponById(profile.equipped), characterById(activeCharacter()))
 }
+
+function activeCharacter(): CharacterId {
+  return profile.character ?? CHARACTERS[0].id
+}
+
+const characterList = el('character-list')
+
+function renderCharacters() {
+  characterList.innerHTML = ''
+  for (const c of CHARACTERS) {
+    const chosen = profile.character === c.id
+    const card = document.createElement('button')
+    card.className = `rounded-xl p-6 text-left ring-1 transition ${
+      chosen ? 'bg-emerald-500/10 ring-emerald-400/70' : 'bg-white/5 ring-white/10 hover:bg-white/10'
+    }`
+    card.innerHTML = `
+      <div class="flex items-center gap-3">
+        <span class="inline-block h-4 w-4 rounded-full" style="background:${c.color}"></span>
+        <span class="text-xl font-bold text-white">${c.name}</span>
+        ${chosen ? '<span class="ml-auto text-xs font-bold text-emerald-300">SELECTED</span>' : ''}
+      </div>
+      <p class="mt-2 text-sm italic text-slate-400">${c.tagline}</p>
+      <div class="mt-4 rounded-lg bg-black/40 p-3">
+        <div class="text-sm font-bold text-sky-300">Passive: ${c.perkName}</div>
+        <p class="mt-1 text-xs text-slate-400">${c.perkDescription}</p>
+      </div>
+    `
+    card.addEventListener('click', () => {
+      profile.character = c.id
+      persist()
+      renderCharacters()
+      show(characterScreen, false)
+      show(menu, true)
+    })
+    characterList.appendChild(card)
+  }
+  el<HTMLButtonElement>('characters-close').classList.toggle('hidden', profile.character === null)
+}
+
+el('character-btn').addEventListener('click', () => {
+  renderCharacters()
+  show(menu, false)
+  show(characterScreen, true)
+})
+el('characters-close').addEventListener('click', () => {
+  show(characterScreen, false)
+  show(menu, true)
+})
 
 type ArsenalMode = 'shop' | 'locker'
 let arsenalMode: ArsenalMode = 'shop'
@@ -212,6 +280,9 @@ function persist() {
   el('menu-scrap').textContent = `${profile.scrap}`
   el('arsenal-scrap').textContent = `${profile.scrap}`
   el('menu-equipped').textContent = weaponById(profile.equipped).name
+  el('menu-character').textContent = profile.character
+    ? characterById(profile.character).name
+    : 'not chosen'
 }
 
 function openArsenal(mode: ArsenalMode) {
@@ -332,6 +403,7 @@ game.onStateChange = (state: GameState) => {
   if (state !== 'menu') {
     show(loreScreen, false)
     show(arsenalScreen, false)
+    show(characterScreen, false)
   }
   canvas.classList.toggle('cursor-none', state === 'playing')
   if (state === 'won' || state === 'lost') {
@@ -381,6 +453,7 @@ const stingPips = el('sting-pips')
 const hudWeapon = el('hud-weapon')
 const hudPerk = el('hud-perk')
 const hudScrap = el('hud-scrap')
+const hudCharacter = el('hud-character')
 
 game.onHud = (h: Hud) => {
   const hpPct = (h.hp / h.maxHp) * 100
@@ -415,6 +488,7 @@ game.onHud = (h: Hud) => {
   hudWeapon.textContent = h.weaponName
   hudPerk.textContent = h.perkName ? `Talent: ${h.perkName}` : 'No talent'
   hudScrap.textContent = `+${h.scrap} scrap`
+  hudCharacter.textContent = h.characterName
 }
 
 el('lore-btn').addEventListener('click', () => {
@@ -432,4 +506,9 @@ el('retry-btn').addEventListener('click', () => launch(currentMission))
 
 persist()
 renderDetail()
+renderCharacters()
 game.onStateChange('menu')
+if (!profile.character) {
+  show(menu, false)
+  show(characterScreen, true)
+}
