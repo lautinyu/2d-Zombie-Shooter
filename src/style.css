@@ -1,0 +1,11 @@
+@import 'tailwindcss';
+
+html,
+body,
+#app {
+  height: 100%;
+  margin: 0;
+  background: #0b0f0d;
+  overflow: hidden;
+  font-family: ui-sans-serif, system-ui, sans-serif;
+}
