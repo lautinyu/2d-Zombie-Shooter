@@ -23,7 +23,10 @@ interface Player {
   hurtCooldown: number
 }
 
-interface Zombie {
+export type EnemyKind = 'zombie' | 'bug'
+
+interface Enemy {
+  kind: EnemyKind
   x: number
   y: number
   r: number
@@ -31,6 +34,7 @@ interface Zombie {
   speed: number
   attackCooldown: number
   wobble: number
+  retreat: number
 }
 
 interface Bullet {
@@ -60,7 +64,11 @@ export interface Hud {
   zoneName: string
   currentZoneName: string
   inMissionZone: boolean
+  stings: number
+  maxStings: number
 }
+
+export type DeathCause = 'wounds' | 'infection'
 
 const PLAYER_RADIUS = 16
 const BULLET_SPEED = 900
@@ -68,6 +76,8 @@ const BULLET_DAMAGE = 34
 const MAG_SIZE = 15
 const RELOAD_TIME = 1.1
 const FIRE_INTERVAL = 0.14
+const MAX_STINGS = 5
+const BUG_SPAWN_CHANCE = 0.2
 
 export class Game {
   private ctx: CanvasRenderingContext2D
@@ -76,9 +86,11 @@ export class Game {
   state: GameState = 'menu'
   mission: Mission | null = null
   kills = 0
+  stings = 0
+  deathCause: DeathCause = 'wounds'
 
   private player: Player = this.makePlayer(0, 0)
-  private zombies: Zombie[] = []
+  private enemies: Enemy[] = []
   private bullets: Bullet[] = []
   private ammoBoxes: AmmoBox[] = []
 
@@ -176,7 +188,9 @@ export class Game {
     this.kills = 0
     this.spawned = 0
     this.spawnTimer = 0
-    this.zombies = []
+    this.stings = 0
+    this.deathCause = 'wounds'
+    this.enemies = []
     this.bullets = []
     this.ammoBoxes = []
     this.mag = MAG_SIZE
@@ -243,6 +257,8 @@ export class Game {
       zoneName: mission ? zoneById(mission.zone).name : '',
       currentZoneName: zone.name,
       inMissionZone: mission ? zone.id === mission.zone : false,
+      stings: this.stings,
+      maxStings: MAX_STINGS,
     })
   }
 
@@ -250,7 +266,7 @@ export class Game {
     this.updatePlayer(dt)
     this.updateWeapon(dt)
     this.updateBullets(dt)
-    this.updateZombies(dt)
+    this.updateEnemies(dt)
     this.updatePickups()
     this.updateSpawning(dt)
     this.updateCamera()
@@ -258,7 +274,13 @@ export class Game {
     if (this.mission && this.kills >= this.mission.target) {
       this.running = false
       this.setState('won')
+    } else if (this.stings >= MAX_STINGS) {
+      this.player.hp = 0
+      this.deathCause = 'infection'
+      this.running = false
+      this.setState('lost')
     } else if (this.player.hp <= 0) {
+      this.deathCause = 'wounds'
       this.running = false
       this.setState('lost')
     }
@@ -351,13 +373,13 @@ export class Game {
       b.life -= dt
       let dead = b.life <= 0 || circleHitsWall(b.x, b.y, 2)
       if (!dead) {
-        for (let j = this.zombies.length - 1; j >= 0; j--) {
-          const z = this.zombies[j]
-          if (Math.hypot(z.x - b.x, z.y - b.y) < z.r) {
-            z.hp -= BULLET_DAMAGE
+        for (let j = this.enemies.length - 1; j >= 0; j--) {
+          const e = this.enemies[j]
+          if (Math.hypot(e.x - b.x, e.y - b.y) < e.r + 2) {
+            e.hp -= BULLET_DAMAGE
             dead = true
-            if (z.hp <= 0) {
-              this.killZombie(j)
+            if (e.hp <= 0) {
+              this.killEnemy(j)
             }
             break
           }
@@ -367,9 +389,9 @@ export class Game {
     }
   }
 
-  private killZombie(index: number) {
-    const z = this.zombies[index]
-    this.zombies.splice(index, 1)
+  private killEnemy(index: number) {
+    const z = this.enemies[index]
+    this.enemies.splice(index, 1)
     if (this.mission && zoneAt(z.x, z.y).id === this.mission.zone) {
       this.kills += 1
     }
@@ -378,26 +400,34 @@ export class Game {
     }
   }
 
-  private updateZombies(dt: number) {
+  private updateEnemies(dt: number) {
     const p = this.player
-    for (const z of this.zombies) {
+    for (const z of this.enemies) {
       z.wobble += dt
       const dx = p.x - z.x
       const dy = p.y - z.y
       const d = Math.hypot(dx, dy) || 1
       const step = z.speed * dt
       const wob = Math.sin(z.wobble * 4) * 0.25
-      const ux = dx / d
-      const uy = dy / d
+      z.retreat = Math.max(0, z.retreat - dt)
+      const dir = z.retreat > 0 ? -1 : 1
+      const ux = (dx / d) * dir
+      const uy = (dy / d) * dir
       const px = -uy * wob
       const py = ux * wob
       this.moveCircle(z, (ux + px) * step, (uy + py) * step)
 
       z.attackCooldown = Math.max(0, z.attackCooldown - dt)
       if (d < z.r + p.r && z.attackCooldown === 0) {
-        p.hp -= 8
+        if (z.kind === 'bug') {
+          this.stings += 1
+          z.attackCooldown = 2.2
+          z.retreat = 1.1
+        } else {
+          p.hp -= 8
+          z.attackCooldown = 0.7
+        }
         p.hurtCooldown = 0.25
-        z.attackCooldown = 0.7
       }
     }
   }
@@ -419,7 +449,7 @@ export class Game {
     const zone = zoneById(mission.zone)
     const remaining = mission.target - this.kills
     const maxAlive = Math.min(14, Math.max(4, Math.ceil(mission.target / 3)))
-    if (this.zombies.length >= maxAlive) return
+    if (this.enemies.length >= maxAlive) return
     if (this.spawned - this.kills >= remaining + 4) return
 
     this.spawnTimer -= dt
@@ -428,17 +458,39 @@ export class Game {
 
     const spot = this.spawnPoint(zone)
     if (!spot) return
-    const tier = Math.random()
-    this.zombies.push({
+    this.enemies.push(
+      Math.random() < BUG_SPAWN_CHANCE ? this.makeBug(spot) : this.makeZombie(spot)
+    )
+    this.spawned += 1
+  }
+
+  private makeZombie(spot: { x: number; y: number }): Enemy {
+    const brute = Math.random() > 0.85
+    return {
+      kind: 'zombie',
       x: spot.x,
       y: spot.y,
-      r: tier > 0.85 ? 20 : 14,
-      hp: tier > 0.85 ? 120 : 60,
-      speed: tier > 0.85 ? 70 : 95 + Math.random() * 30,
+      r: brute ? 20 : 14,
+      hp: brute ? 120 : 60,
+      speed: brute ? 70 : 95 + Math.random() * 30,
       attackCooldown: 0,
       wobble: Math.random() * 10,
-    })
-    this.spawned += 1
+      retreat: 0,
+    }
+  }
+
+  private makeBug(spot: { x: number; y: number }): Enemy {
+    return {
+      kind: 'bug',
+      x: spot.x,
+      y: spot.y,
+      r: 10,
+      hp: 34,
+      speed: 1.5 * (95 + Math.random() * 30),
+      attackCooldown: 0,
+      wobble: Math.random() * 10,
+      retreat: 0,
+    }
   }
 
   private spawnPoint(zone: Zone) {
@@ -489,14 +541,9 @@ export class Game {
       ctx.strokeRect(a.x - 8, a.y - 6, 16, 12)
     }
 
-    for (const z of this.zombies) {
-      ctx.beginPath()
-      ctx.arc(z.x, z.y, z.r, 0, Math.PI * 2)
-      ctx.fillStyle = z.r > 16 ? '#8b1414' : '#d62828'
-      ctx.fill()
-      ctx.strokeStyle = '#4a0a0a'
-      ctx.lineWidth = 2
-      ctx.stroke()
+    for (const e of this.enemies) {
+      if (e.kind === 'bug') this.drawBug(e)
+      else this.drawZombie(e)
     }
 
     ctx.fillStyle = '#ffe066'
@@ -511,6 +558,41 @@ export class Game {
 
     this.drawCrosshair()
     this.drawMinimap()
+  }
+
+  private drawZombie(z: Enemy) {
+    const ctx = this.ctx
+    ctx.beginPath()
+    ctx.arc(z.x, z.y, z.r, 0, Math.PI * 2)
+    ctx.fillStyle = z.r > 16 ? '#8b1414' : '#d62828'
+    ctx.fill()
+    ctx.strokeStyle = '#4a0a0a'
+    ctx.lineWidth = 2
+    ctx.stroke()
+  }
+
+  private drawBug(b: Enemy) {
+    const ctx = this.ctx
+    const flap = Math.sin(b.wobble * 22) * 0.6
+    ctx.save()
+    ctx.translate(b.x, b.y)
+    ctx.fillStyle = 'rgba(255, 213, 128, 0.45)'
+    for (const side of [-1, 1]) {
+      ctx.save()
+      ctx.rotate(side * (0.7 + flap * side))
+      ctx.beginPath()
+      ctx.ellipse(0, -b.r * 1.3, b.r * 0.5, b.r * 1.1, 0, 0, Math.PI * 2)
+      ctx.fill()
+      ctx.restore()
+    }
+    ctx.beginPath()
+    ctx.arc(0, 0, b.r, 0, Math.PI * 2)
+    ctx.fillStyle = '#ffa41b'
+    ctx.fill()
+    ctx.strokeStyle = '#8a4b00'
+    ctx.lineWidth = 2
+    ctx.stroke()
+    ctx.restore()
   }
 
   private drawGrid() {
@@ -612,10 +694,10 @@ export class Game {
       ctx.fillRect(mx + w.x * s, my + w.y * s, Math.max(1, w.w * s), Math.max(1, w.h * s))
     }
 
-    ctx.fillStyle = '#d62828'
-    for (const z of this.zombies) {
+    for (const e of this.enemies) {
+      ctx.fillStyle = e.kind === 'bug' ? '#ffa41b' : '#d62828'
       ctx.beginPath()
-      ctx.arc(mx + z.x * s, my + z.y * s, 2.5, 0, Math.PI * 2)
+      ctx.arc(mx + e.x * s, my + e.y * s, e.kind === 'bug' ? 2 : 2.5, 0, Math.PI * 2)
       ctx.fill()
     }
 
