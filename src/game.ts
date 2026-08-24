@@ -1,4 +1,8 @@
 import type { Mission } from './missions'
+import type { Weapon } from './weapons'
+import { weaponById } from './weapons'
+import { SCRAP_PER_BUG, SCRAP_PER_KILL } from './profile'
+import { playShot } from './audio'
 import type { Zone } from './world'
 import {
   WALLS,
@@ -35,6 +39,9 @@ interface Enemy {
   attackCooldown: number
   wobble: number
   retreat: number
+  baseSpeed: number
+  poison: number
+  burn: number
 }
 
 interface Bullet {
@@ -43,6 +50,13 @@ interface Bullet {
   vx: number
   vy: number
   life: number
+  damage: number
+  pierce: boolean
+  poison: boolean
+  ignite: boolean
+  color: string
+  width: number
+  hit: Set<Enemy>
 }
 
 interface AmmoBox {
@@ -66,17 +80,22 @@ export interface Hud {
   inMissionZone: boolean
   stings: number
   maxStings: number
+  weaponName: string
+  perkName: string
+  scrap: number
 }
 
 export type DeathCause = 'wounds' | 'infection'
 
 const PLAYER_RADIUS = 16
-const BULLET_SPEED = 900
-const BULLET_DAMAGE = 34
-const MAG_SIZE = 15
-const RELOAD_TIME = 1.1
-const FIRE_INTERVAL = 0.14
 const MAX_STINGS = 5
+const POISON_DURATION = 3
+const POISON_DPS = 14
+const BURN_DURATION = 2.5
+const BURN_DPS = 16
+const BURN_SLOW = 0.45
+const ACID_SHOT_INTERVAL = 5
+const IGNITE_CHANCE = 0.3
 const BUG_SPAWN_CHANCE = 0.2
 
 export class Game {
@@ -87,17 +106,20 @@ export class Game {
   mission: Mission | null = null
   kills = 0
   stings = 0
+  scrapEarned = 0
   deathCause: DeathCause = 'wounds'
+  weapon: Weapon = weaponById('rusty-pistol')
 
   private player: Player = this.makePlayer(0, 0)
   private enemies: Enemy[] = []
   private bullets: Bullet[] = []
   private ammoBoxes: AmmoBox[] = []
 
-  private mag = MAG_SIZE
-  private reserve = 90
+  private mag = this.weapon.magSize
+  private reserve = this.weapon.reserveStart
   private reloadTimer = 0
   private fireTimer = 0
+  private shotsFired = 0
 
   private spawnTimer = 0
   private spawned = 0
@@ -183,9 +205,12 @@ export class Game {
     return window.innerHeight
   }
 
-  startMission(mission: Mission) {
+  startMission(mission: Mission, weapon: Weapon) {
     this.mission = mission
+    this.weapon = weapon
     this.kills = 0
+    this.scrapEarned = 0
+    this.shotsFired = 0
     this.spawned = 0
     this.spawnTimer = 0
     this.stings = 0
@@ -193,8 +218,8 @@ export class Game {
     this.enemies = []
     this.bullets = []
     this.ammoBoxes = []
-    this.mag = MAG_SIZE
-    this.reserve = 90
+    this.mag = weapon.magSize
+    this.reserve = weapon.reserveStart
     this.reloadTimer = 0
     this.shooting = false
     this.queuedShot = false
@@ -248,7 +273,7 @@ export class Game {
       hp: Math.max(0, Math.round(this.player.hp)),
       maxHp: this.player.maxHp,
       mag: this.mag,
-      magSize: MAG_SIZE,
+      magSize: this.weapon.magSize,
       reserve: this.reserve,
       reloading: this.reloadTimer > 0,
       kills: this.kills,
@@ -259,6 +284,9 @@ export class Game {
       inMissionZone: mission ? zone.id === mission.zone : false,
       stings: this.stings,
       maxStings: MAX_STINGS,
+      weaponName: this.weapon.name,
+      perkName: this.weapon.perk === 'none' ? '' : this.weapon.perkName,
+      scrap: this.scrapEarned,
     })
   }
 
@@ -322,8 +350,8 @@ export class Game {
 
   private startReload() {
     if (this.state !== 'playing') return
-    if (this.reloadTimer > 0 || this.mag === MAG_SIZE || this.reserve <= 0) return
-    this.reloadTimer = RELOAD_TIME
+    if (this.reloadTimer > 0 || this.mag === this.weapon.magSize || this.reserve <= 0) return
+    this.reloadTimer = this.weapon.reloadTime
   }
 
   private updateWeapon(dt: number) {
@@ -331,7 +359,7 @@ export class Game {
     if (this.reloadTimer > 0) {
       this.reloadTimer -= dt
       if (this.reloadTimer <= 0) {
-        const need = MAG_SIZE - this.mag
+        const need = this.weapon.magSize - this.mag
         const take = Math.min(need, this.reserve)
         this.mag += take
         this.reserve -= take
@@ -342,7 +370,7 @@ export class Game {
     if ((this.shooting || this.queuedShot) && this.fireTimer === 0) {
       if (this.mag > 0) {
         this.fire()
-        this.fireTimer = FIRE_INTERVAL
+        this.fireTimer = this.weapon.fireInterval
         this.queuedShot = false
       } else {
         this.queuedShot = false
@@ -353,16 +381,31 @@ export class Game {
 
   private fire() {
     const p = this.player
-    const spread = (Math.random() - 0.5) * 0.05
-    const a = p.angle + spread
-    this.bullets.push({
-      x: p.x + Math.cos(a) * (p.r + 6),
-      y: p.y + Math.sin(a) * (p.r + 6),
-      vx: Math.cos(a) * BULLET_SPEED,
-      vy: Math.sin(a) * BULLET_SPEED,
-      life: 1.2,
-    })
+    const w = this.weapon
+    this.shotsFired += 1
+    const acidShot = w.perk === 'acidic-spray' && this.shotsFired % ACID_SHOT_INTERVAL === 0
+
+    for (let i = 0; i < w.pellets; i++) {
+      const spread = (Math.random() - 0.5) * w.spread * (w.pellets > 1 ? 2 : 1)
+      const a = p.angle + spread
+      const speed = w.bulletSpeed * (w.pellets > 1 ? 0.85 + Math.random() * 0.3 : 1)
+      this.bullets.push({
+        x: p.x + Math.cos(a) * (p.r + 6),
+        y: p.y + Math.sin(a) * (p.r + 6),
+        vx: Math.cos(a) * speed,
+        vy: Math.sin(a) * speed,
+        life: w.bulletLife,
+        damage: w.damage,
+        pierce: w.perk === 'armor-piercing',
+        poison: acidShot,
+        ignite: w.perk === 'dragons-breath',
+        color: acidShot ? '#7cf03d' : w.perk === 'dragons-breath' ? '#ff7a18' : '#ffe066',
+        width: acidShot ? w.tracerWidth + 1 : w.tracerWidth,
+        hit: new Set<Enemy>(),
+      })
+    }
     this.mag -= 1
+    playShot(w)
   }
 
   private updateBullets(dt: number) {
@@ -375,12 +418,15 @@ export class Game {
       if (!dead) {
         for (let j = this.enemies.length - 1; j >= 0; j--) {
           const e = this.enemies[j]
-          if (Math.hypot(e.x - b.x, e.y - b.y) < e.r + 2) {
-            e.hp -= BULLET_DAMAGE
+          if (b.hit.has(e)) continue
+          if (Math.hypot(e.x - b.x, e.y - b.y) >= e.r + 2) continue
+          b.hit.add(e)
+          e.hp -= b.damage
+          if (b.poison) e.poison = POISON_DURATION
+          if (b.ignite && e.kind === 'bug' && Math.random() < IGNITE_CHANCE) e.burn = BURN_DURATION
+          if (e.hp <= 0) this.killEnemy(j)
+          if (!b.pierce) {
             dead = true
-            if (e.hp <= 0) {
-              this.killEnemy(j)
-            }
             break
           }
         }
@@ -395,6 +441,7 @@ export class Game {
     if (this.mission && zoneAt(z.x, z.y).id === this.mission.zone) {
       this.kills += 1
     }
+    this.scrapEarned += z.kind === 'bug' ? SCRAP_PER_BUG : SCRAP_PER_KILL
     if (Math.random() < 0.22) {
       this.ammoBoxes.push({ x: z.x, y: z.y, amount: 20 })
     }
@@ -402,8 +449,22 @@ export class Game {
 
   private updateEnemies(dt: number) {
     const p = this.player
-    for (const z of this.enemies) {
+    for (let i = this.enemies.length - 1; i >= 0; i--) {
+      const z = this.enemies[i]
       z.wobble += dt
+      if (z.poison > 0) {
+        z.poison -= dt
+        z.hp -= POISON_DPS * dt
+      }
+      if (z.burn > 0) {
+        z.burn -= dt
+        z.hp -= BURN_DPS * dt
+      }
+      if (z.hp <= 0) {
+        this.killEnemy(i)
+        continue
+      }
+      z.speed = z.burn > 0 ? z.baseSpeed * BURN_SLOW : z.baseSpeed
       const dx = p.x - z.x
       const dy = p.y - z.y
       const d = Math.hypot(dx, dy) || 1
@@ -472,10 +533,13 @@ export class Game {
       y: spot.y,
       r: brute ? 20 : 14,
       hp: brute ? 120 : 60,
-      speed: brute ? 70 : 95 + Math.random() * 30,
+      speed: 0,
+      baseSpeed: brute ? 70 : 95 + Math.random() * 30,
       attackCooldown: 0,
       wobble: Math.random() * 10,
       retreat: 0,
+      poison: 0,
+      burn: 0,
     }
   }
 
@@ -486,10 +550,13 @@ export class Game {
       y: spot.y,
       r: 10,
       hp: 34,
-      speed: 1.5 * (95 + Math.random() * 30),
+      speed: 0,
+      baseSpeed: 1.5 * (95 + Math.random() * 30),
       attackCooldown: 0,
       wobble: Math.random() * 10,
       retreat: 0,
+      poison: 0,
+      burn: 0,
     }
   }
 
@@ -546,11 +613,17 @@ export class Game {
       else this.drawZombie(e)
     }
 
-    ctx.fillStyle = '#ffe066'
     for (const b of this.bullets) {
+      ctx.strokeStyle = b.color
+      ctx.lineWidth = b.width
+      ctx.lineCap = 'round'
+      const len = Math.min(18, Math.hypot(b.vx, b.vy) * 0.02)
+      const nx = b.vx / (Math.hypot(b.vx, b.vy) || 1)
+      const ny = b.vy / (Math.hypot(b.vx, b.vy) || 1)
       ctx.beginPath()
-      ctx.arc(b.x, b.y, 3, 0, Math.PI * 2)
-      ctx.fill()
+      ctx.moveTo(b.x - nx * len, b.y - ny * len)
+      ctx.lineTo(b.x, b.y)
+      ctx.stroke()
     }
 
     this.drawPlayer()
@@ -560,8 +633,19 @@ export class Game {
     this.drawMinimap()
   }
 
+  private drawStatusRing(e: Enemy) {
+    const ctx = this.ctx
+    if (e.poison <= 0 && e.burn <= 0) return
+    ctx.beginPath()
+    ctx.arc(e.x, e.y, e.r + 5, 0, Math.PI * 2)
+    ctx.strokeStyle = e.burn > 0 ? 'rgba(255,122,24,0.9)' : 'rgba(124,240,61,0.9)'
+    ctx.lineWidth = 2
+    ctx.stroke()
+  }
+
   private drawZombie(z: Enemy) {
     const ctx = this.ctx
+    this.drawStatusRing(z)
     ctx.beginPath()
     ctx.arc(z.x, z.y, z.r, 0, Math.PI * 2)
     ctx.fillStyle = z.r > 16 ? '#8b1414' : '#d62828'
@@ -573,6 +657,7 @@ export class Game {
 
   private drawBug(b: Enemy) {
     const ctx = this.ctx
+    this.drawStatusRing(b)
     const flap = Math.sin(b.wobble * 22) * 0.6
     ctx.save()
     ctx.translate(b.x, b.y)
