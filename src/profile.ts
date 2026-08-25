@@ -1,5 +1,7 @@
 import type { CharacterId } from './characters'
 import { CHARACTERS } from './characters'
+import type { PathId } from './missions'
+import { MISSIONS } from './missions'
 import type { WeaponId } from './weapons'
 import { STARTER_WEAPONS, WEAPONS } from './weapons'
 
@@ -10,6 +12,10 @@ export interface Profile {
   owned: WeaponId[]
   equipped: WeaponId
   character: CharacterId | null
+  /** Mission ids already cleared. */
+  completed: string[]
+  /** Campaign branch the player committed to. */
+  path: PathId | null
 }
 
 const DEFAULT_PROFILE: Profile = {
@@ -17,6 +23,8 @@ const DEFAULT_PROFILE: Profile = {
   owned: [...STARTER_WEAPONS],
   equipped: STARTER_WEAPONS[0],
   character: null,
+  completed: [],
+  path: null,
 }
 
 function isWeaponId(value: unknown): value is WeaponId {
@@ -27,10 +35,18 @@ function isCharacterId(value: unknown): value is CharacterId {
   return typeof value === 'string' && CHARACTERS.some((c) => c.id === value)
 }
 
+function isMissionId(value: unknown): value is string {
+  return typeof value === 'string' && MISSIONS.some((m) => m.id === value)
+}
+
+function isPathId(value: unknown): value is PathId {
+  return value === 'combat' || value === 'rescue'
+}
+
 export function loadProfile(): Profile {
   try {
     const raw = localStorage.getItem(STORAGE_KEY)
-    if (!raw) return { ...DEFAULT_PROFILE, owned: [...STARTER_WEAPONS] }
+    if (!raw) return { ...DEFAULT_PROFILE, owned: [...STARTER_WEAPONS], completed: [] }
     const parsed: unknown = JSON.parse(raw)
     if (typeof parsed !== 'object' || parsed === null) throw new Error('bad profile')
     const record = parsed as Record<string, unknown>
@@ -46,9 +62,11 @@ export function loadProfile(): Profile {
       owned,
       equipped,
       character: isCharacterId(record.character) ? record.character : null,
+      completed: Array.isArray(record.completed) ? record.completed.filter(isMissionId) : [],
+      path: isPathId(record.path) ? record.path : null,
     }
   } catch {
-    return { ...DEFAULT_PROFILE, owned: [...STARTER_WEAPONS] }
+    return { ...DEFAULT_PROFILE, owned: [...STARTER_WEAPONS], completed: [] }
   }
 }
 
@@ -64,6 +82,7 @@ export function saveProfile(profile: Profile) {
 export const SCRAP_PER_KILL = 2
 export const SCRAP_PER_BUG = 4
 
-export function missionReward(target: number): number {
-  return 20 + target * 2
+export function missionReward(mission: { target: number; survivors: number; payout: number }): number {
+  const base = 20 + mission.target * 2 + mission.survivors * 25
+  return Math.round(base * mission.payout)
 }

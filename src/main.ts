@@ -1,8 +1,8 @@
 import './style.css'
 import { Game } from './game'
 import type { GameState, Hud } from './game'
-import { MISSIONS, missionZoneName } from './missions'
-import type { Mission } from './missions'
+import { MISSIONS, missionMapName, missionUnlocked, pathComplete, pathMissions } from './missions'
+import type { Mission, PathId } from './missions'
 import { RadarChart } from './radar'
 import { WEAPONS, weaponById } from './weapons'
 import type { Weapon, WeaponId } from './weapons'
@@ -43,13 +43,17 @@ app.innerHTML = `
       <div class="rounded-lg bg-black/60 p-3 ring-1 ring-white/10">
         <div id="mission-name" class="text-sm font-bold text-white">Mission</div>
         <div class="mt-0.5 flex items-center justify-between text-xs text-slate-300">
-          <span id="mission-zone">Zone</span>
+          <span id="mission-zone">Map</span>
           <span id="kill-text" class="font-mono">0/0</span>
         </div>
         <div class="mt-1.5 h-2.5 w-full overflow-hidden rounded-full bg-white/10">
           <div id="mission-bar" class="h-full w-0 rounded-full bg-red-500 transition-[width] duration-200"></div>
         </div>
-        <div id="zone-warning" class="mt-2 hidden text-xs font-semibold text-amber-400"></div>
+        <div id="objective-text" class="mt-2 text-xs text-slate-400"></div>
+        <div id="survivor-panel" class="mt-3 hidden border-t border-white/10 pt-2">
+          <div class="text-xs font-semibold uppercase tracking-wider text-slate-200">Survivors</div>
+          <div id="survivor-list" class="mt-1.5 space-y-1.5"></div>
+        </div>
       </div>
 
       <div class="rounded-lg bg-black/60 p-3 ring-1 ring-white/10">
@@ -59,6 +63,7 @@ app.innerHTML = `
         </div>
         <div id="hud-perk" class="mt-0.5 text-xs font-semibold text-sky-300"></div>
         <div id="hud-character" class="mt-1 border-t border-white/10 pt-1 text-xs font-semibold text-emerald-300"></div>
+        <div id="hud-lives" class="mt-0.5 hidden text-xs font-semibold text-sky-300"></div>
       </div>
     </div>
 
@@ -72,8 +77,8 @@ app.innerHTML = `
   </div>
 
   <!-- Main menu -->
-  <div id="menu" class="absolute inset-0 flex items-center justify-center bg-slate-950/95 p-6">
-    <div class="w-full max-w-3xl">
+  <div id="menu" class="absolute inset-0 flex items-center justify-center overflow-y-auto bg-slate-950/95 p-6">
+    <div class="w-full max-w-4xl">
       <h1 class="text-center text-5xl font-black tracking-tight text-emerald-400 drop-shadow">ZOMBIE SHOOTER</h1>
       <p class="mt-2 text-center text-sm text-slate-400">Top-down survival · pick a mission, clear the zone, get out alive.</p>
       <div class="mt-4 text-center text-sm font-bold text-yellow-300">Scrap: <span id="menu-scrap">0</span></div>
@@ -87,11 +92,11 @@ app.innerHTML = `
         · Survivor: <span id="menu-character" class="font-semibold text-amber-300">—</span>
         <button id="character-btn" class="ml-2 rounded bg-white/10 px-2 py-0.5 font-semibold text-white hover:bg-white/20">Change</button>
       </div>
-      <div id="mission-list" class="mt-6 grid gap-4 sm:grid-cols-3"></div>
+      <div id="campaign" class="mt-6 space-y-4"></div>
       <div class="mt-8 rounded-lg bg-white/5 p-4 text-xs text-slate-400 ring-1 ring-white/10">
         <span class="font-semibold text-slate-200">Controls:</span>
         WASD or Arrow keys to move · aim with the mouse · left click to shoot · R to reload.
-        Kills only count inside the mission zone. Yellow crates restock ammo.
+        Each mission loads its own isolated map. Yellow crates restock ammo.
         <span class="font-semibold text-orange-300">Orange Plague Bugs</span> are fast and sting — five stings and you turn.
       </div>
     </div>
@@ -108,11 +113,11 @@ app.innerHTML = `
   </div>
 
   <!-- Character select -->
-  <div id="characters" class="absolute inset-0 z-20 hidden items-center justify-center bg-slate-950/98 p-6">
-    <div class="w-full max-w-3xl">
+  <div id="characters" class="absolute inset-0 z-20 hidden items-center justify-center overflow-y-auto bg-slate-950/98 p-6">
+    <div class="w-full max-w-4xl">
       <h2 class="text-center text-4xl font-black tracking-tight text-emerald-400">CHOOSE YOUR SURVIVOR</h2>
       <p class="mt-2 text-center text-sm text-slate-400">Each survivor carries a passive that changes how the wasteland treats you.</p>
-      <div id="character-list" class="mt-8 grid gap-5 md:grid-cols-2"></div>
+      <div id="character-list" class="mt-8 grid gap-4 md:grid-cols-2"></div>
       <div class="mt-6 text-center">
         <button id="characters-close" class="hidden rounded-lg bg-white/10 px-8 py-3 text-sm font-bold text-white hover:bg-white/20">Back to Menu</button>
       </div>
@@ -192,26 +197,118 @@ const game = new Game(canvas)
 const profile = loadProfile()
 const radar = new RadarChart(el<HTMLCanvasElement>('radar'), 280)
 
-const missionList = el('mission-list')
-for (const m of MISSIONS) {
-  const card = document.createElement('button')
-  card.className =
-    'group rounded-xl bg-white/5 p-5 text-left ring-1 ring-white/10 transition hover:bg-emerald-500/10 hover:ring-emerald-400/60'
-  card.innerHTML = `
-    <div class="text-xs font-semibold uppercase tracking-wider text-emerald-400">${missionZoneName(m)}</div>
-    <div class="mt-1 text-xl font-bold text-white">${m.name}</div>
-    <p class="mt-2 text-sm text-slate-400">${m.description}</p>
-    <div class="mt-4 inline-block rounded-md bg-red-500/15 px-2.5 py-1 text-xs font-semibold text-red-300">Target: ${m.target} zombies</div>
-    <div class="mt-4 text-sm font-bold text-emerald-400 opacity-0 transition group-hover:opacity-100">Accept mission →</div>
-  `
-  card.addEventListener('click', () => launch(m))
-  missionList.appendChild(card)
-}
+const campaignEl = el('campaign')
 
 let currentMission: Mission = MISSIONS[0]
 
+function unlocked(m: Mission) {
+  return missionUnlocked(m, profile.completed, profile.path)
+}
+
+function missionCard(m: Mission): HTMLElement {
+  const done = profile.completed.includes(m.id)
+  const open = unlocked(m)
+  const card = document.createElement('button')
+  card.disabled = !open
+  card.className = `group w-full rounded-xl p-4 text-left ring-1 transition ${
+    done
+      ? 'bg-emerald-500/10 ring-emerald-400/40'
+      : open
+        ? 'bg-white/5 ring-white/10 hover:bg-emerald-500/10 hover:ring-emerald-400/60'
+        : 'cursor-not-allowed bg-black/40 opacity-50 ring-white/5'
+  }`
+  const badge =
+    m.type === 'protect'
+      ? `<span class="rounded-md bg-sky-500/15 px-2 py-0.5 text-[11px] font-semibold text-sky-300">Protect ${m.survivors}</span>`
+      : `<span class="rounded-md bg-red-500/15 px-2 py-0.5 text-[11px] font-semibold text-red-300">${m.target} kills</span>`
+  card.innerHTML = `
+    <div class="flex items-center justify-between">
+      <span class="text-[11px] font-semibold uppercase tracking-wider text-emerald-400">${missionMapName(m)}</span>
+      ${done ? '<span class="text-[11px] font-bold text-emerald-300">CLEARED</span>' : open ? '' : '<span class="text-[11px] font-bold text-slate-400">LOCKED</span>'}
+    </div>
+    <div class="mt-1 text-lg font-bold text-white">${m.name}</div>
+    <p class="mt-1 text-xs text-slate-400">${m.description}</p>
+    <div class="mt-3 flex items-center gap-2">
+      ${badge}
+      <span class="rounded-md bg-yellow-500/15 px-2 py-0.5 text-[11px] font-semibold text-yellow-300">${missionReward(m)} scrap</span>
+    </div>
+  `
+  if (open) card.addEventListener('click', () => launch(m))
+  return card
+}
+
+function branchColumn(path: PathId, title: string, blurb: string): HTMLElement {
+  const col = document.createElement('div')
+  const committed = profile.path === path
+  const finished = pathComplete(path, profile.completed)
+  const lockedOut = profile.path !== null && !committed && !pathComplete(profile.path, profile.completed)
+  col.className = `rounded-2xl p-4 ring-1 ${
+    committed ? 'bg-emerald-500/5 ring-emerald-400/40' : 'bg-white/5 ring-white/10'
+  }`
+  const status = finished
+    ? '<span class="text-[11px] font-bold text-emerald-300">PATH COMPLETE</span>'
+    : committed
+      ? '<span class="text-[11px] font-bold text-emerald-300">COMMITTED</span>'
+      : lockedOut
+        ? '<span class="text-[11px] font-bold text-amber-300">LOCKED OUT</span>'
+        : ''
+  col.innerHTML = `
+    <div class="flex items-center justify-between">
+      <h3 class="text-sm font-black uppercase tracking-wider text-white">${title}</h3>
+      ${status}
+    </div>
+    <p class="mt-1 text-xs text-slate-400">${blurb}</p>
+  `
+  const list = document.createElement('div')
+  list.className = 'mt-3 space-y-3'
+  for (const m of pathMissions(path)) list.appendChild(missionCard(m))
+  col.appendChild(list)
+  return col
+}
+
+function renderCampaign() {
+  campaignEl.innerHTML = ''
+
+  const intro = document.createElement('div')
+  intro.className = 'grid gap-4 sm:grid-cols-[minmax(0,1fr)_minmax(0,2fr)] items-start'
+  const prologue = document.createElement('div')
+  prologue.className = 'rounded-2xl bg-white/5 p-4 ring-1 ring-white/10'
+  prologue.innerHTML =
+    '<h3 class="text-sm font-black uppercase tracking-wider text-white">Prologue</h3><p class="mt-1 text-xs text-slate-400">Clear this to open both branches.</p>'
+  const first = document.createElement('div')
+  first.className = 'mt-3'
+  first.appendChild(missionCard(MISSIONS[0]))
+  prologue.appendChild(first)
+
+  const note = document.createElement('div')
+  note.className = 'rounded-2xl bg-black/30 p-4 text-xs text-slate-400 ring-1 ring-white/10'
+  note.innerHTML = `
+    <span class="font-semibold text-slate-200">Campaign paths:</span>
+    picking a mission on one branch commits you to it — the other branch stays locked until your
+    branch is finished. Branch missions run on their own dedicated maps and pay 40–80% more scrap.
+    ${profile.path ? `<div class="mt-2 font-semibold text-emerald-300">Current branch: ${profile.path === 'combat' ? 'Combat Focus' : 'Rescue Focus'}${pathComplete(profile.path, profile.completed) ? ' (complete — both branches open)' : ''}</div>` : ''}
+  `
+  intro.appendChild(prologue)
+  intro.appendChild(note)
+  campaignEl.appendChild(intro)
+
+  const branches = document.createElement('div')
+  branches.className = 'grid gap-4 md:grid-cols-2'
+  branches.appendChild(
+    branchColumn('combat', 'Path A · Combat Focus', 'Hunt the horde and break the infected hive.')
+  )
+  branches.appendChild(
+    branchColumn('rescue', 'Path B · Rescue Focus', 'Escort survivors out alive — one death fails the run.')
+  )
+  campaignEl.appendChild(branches)
+}
+
 function launch(m: Mission) {
   currentMission = m
+  if (m.path && profile.path === null) {
+    profile.path = m.path
+    persist()
+  }
   game.startMission(m, weaponById(profile.equipped), characterById(activeCharacter()))
 }
 
@@ -283,6 +380,7 @@ function persist() {
   el('menu-character').textContent = profile.character
     ? characterById(profile.character).name
     : 'not chosen'
+  renderCampaign()
 }
 
 function openArsenal(mode: ArsenalMode) {
@@ -406,8 +504,11 @@ game.onStateChange = (state: GameState) => {
     show(characterScreen, false)
   }
   canvas.classList.toggle('cursor-none', state === 'playing')
+  if (state === 'won') {
+    if (!profile.completed.includes(currentMission.id)) profile.completed.push(currentMission.id)
+  }
   if (state === 'won' || state === 'lost') {
-    const bonus = state === 'won' ? missionReward(currentMission.target) : 0
+    const bonus = state === 'won' ? missionReward(currentMission) : 0
     const total = game.scrapEarned + bonus
     profile.scrap += total
     persist()
@@ -418,13 +519,24 @@ game.onStateChange = (state: GameState) => {
     el(state === 'won' ? 'win-reward' : 'lose-reward').textContent = rewardText
   }
   if (state === 'won') {
-    el('win-sub').textContent = `${currentMission.name} complete — ${currentMission.target} zombies cleared in ${missionZoneName(currentMission)}.`
+    const where = missionMapName(currentMission)
+    el('win-sub').textContent =
+      currentMission.type === 'protect'
+        ? `${currentMission.name} complete — all ${currentMission.survivors} survivors extracted from ${where}.`
+        : `${currentMission.name} complete — ${currentMission.target} zombies cleared in ${where}.`
+    const nexts = currentMission.unlocks.filter((id) => !profile.completed.includes(id))
+    el('win-reward').textContent += nexts.length ? ` · New missions unlocked` : ''
   }
   if (state === 'lost') {
     const infected = game.deathCause === 'infection'
+    const lostSurvivor = game.deathCause === 'survivor'
     const title = el('lose-title')
     const tagline = el('lose-tagline')
-    title.textContent = infected ? 'INFECTION OVERWHELM!' : 'GAME OVER'
+    title.textContent = infected
+      ? 'INFECTION OVERWHELM!'
+      : lostSurvivor
+        ? 'SURVIVOR LOST'
+        : 'GAME OVER'
     title.className = `text-6xl font-black ${infected ? 'animate-pulse text-orange-400' : 'text-red-500'}`
     tagline.classList.toggle('hidden', !infected)
     tagline.className = `mt-4 text-2xl font-bold text-orange-300 ${infected ? 'animate-pulse' : 'hidden'}`
@@ -432,9 +544,12 @@ game.onStateChange = (state: GameState) => {
     loseScreen.className = `absolute inset-0 flex items-center justify-center p-6 ${
       infected ? 'bg-orange-950/90' : 'bg-red-950/90'
     }`
+    const where = missionMapName(currentMission)
     el('lose-sub').textContent = infected
-      ? `The venom took hold in ${missionZoneName(currentMission)} after 5 stings — ${game.kills} / ${currentMission.target} cleared.`
-      : `You fell in ${missionZoneName(currentMission)} with ${game.kills} / ${currentMission.target} zombies cleared.`
+      ? `The venom took hold in ${where} after 5 stings.`
+      : lostSurvivor
+        ? `A survivor died in ${where}. The escort is over.`
+        : `You fell in ${where} with ${game.kills} zombies cleared.`
   }
 }
 
@@ -446,7 +561,10 @@ const missionBar = el('mission-bar')
 const missionName = el('mission-name')
 const missionZone = el('mission-zone')
 const killText = el('kill-text')
-const zoneWarning = el('zone-warning')
+const objectiveText = el('objective-text')
+const survivorPanel = el('survivor-panel')
+const survivorList = el('survivor-list')
+const hudLives = el('hud-lives')
 const currentZone = el('current-zone')
 const stingText = el('sting-text')
 const stingPips = el('sting-pips')
@@ -465,12 +583,43 @@ game.onHud = (h: Hud) => {
   ammoText.textContent = `${h.mag} / ${h.reserve}`
   reloadText.classList.toggle('hidden', !h.reloading)
   missionName.textContent = h.missionName
-  missionZone.textContent = h.zoneName
-  killText.textContent = `Zombies Cleared: ${h.kills}/${h.target}`
-  missionBar.style.width = `${h.target ? (h.kills / h.target) * 100 : 0}%`
-  currentZone.textContent = h.currentZoneName
-  zoneWarning.classList.toggle('hidden', h.inMissionZone)
-  zoneWarning.textContent = h.inMissionZone ? '' : `Head to ${h.zoneName} — kills outside it don't count.`
+  missionZone.textContent = h.mapName
+  objectiveText.textContent = h.objective
+  currentZone.textContent = h.mapName
+
+  if (h.isProtect) {
+    const total = h.survivors.length
+    killText.textContent = `Extracted: ${h.extracted}/${total}`
+    missionBar.style.width = `${total ? (h.extracted / total) * 100 : 0}%`
+  } else {
+    killText.textContent = `Zombies Cleared: ${h.kills}/${h.target}`
+    missionBar.style.width = `${h.target ? (h.kills / h.target) * 100 : 0}%`
+  }
+
+  survivorPanel.classList.toggle('hidden', !h.isProtect)
+  if (h.isProtect) {
+    if (survivorList.children.length !== h.survivors.length) {
+      survivorList.innerHTML = ''
+      for (let i = 0; i < h.survivors.length; i++) {
+        const row = document.createElement('div')
+        row.innerHTML =
+          '<div class="flex items-center justify-between text-[11px] text-slate-300"><span></span><span></span></div><div class="mt-0.5 h-1.5 w-full overflow-hidden rounded-full bg-white/10"><div class="h-full w-full rounded-full bg-emerald-500"></div></div>'
+        survivorList.appendChild(row)
+      }
+    }
+    h.survivors.forEach((s, i) => {
+      const row = survivorList.children[i]
+      const labels = row.querySelectorAll('span')
+      labels[0].textContent = `Survivor ${i + 1}`
+      const pct = (s.hp / s.maxHp) * 100
+      labels[1].textContent = s.safe ? 'SAFE' : `${Math.round(pct)}%`
+      const fill = row.querySelectorAll<HTMLElement>('div')[2]
+      fill.style.width = `${pct}%`
+      fill.className = `h-full rounded-full ${
+        s.safe ? 'bg-sky-400' : pct > 50 ? 'bg-emerald-500' : pct > 25 ? 'bg-amber-500' : 'bg-red-500'
+      }`
+    })
+  }
 
   stingText.textContent = `Stings: ${h.stings}/${h.maxStings}`
   stingText.className = `text-xs font-semibold ${h.stings >= h.maxStings - 1 ? 'animate-pulse text-red-400' : 'text-orange-300'}`
@@ -489,6 +638,8 @@ game.onHud = (h: Hud) => {
   hudPerk.textContent = h.perkName ? `Talent: ${h.perkName}` : 'No talent'
   hudScrap.textContent = `+${h.scrap} scrap`
   hudCharacter.textContent = h.characterName
+  hudLives.classList.toggle('hidden', h.lives <= 0)
+  hudLives.textContent = `Extra lives: ${h.lives}`
 }
 
 el('lore-btn').addEventListener('click', () => {

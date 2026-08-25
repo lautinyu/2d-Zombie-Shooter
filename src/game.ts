@@ -5,16 +5,8 @@ import type { Character } from './characters'
 import { characterById } from './characters'
 import { SCRAP_PER_BUG, SCRAP_PER_KILL } from './profile'
 import { playShot } from './audio'
-import type { Zone } from './world'
-import {
-  WALLS,
-  WORLD_HEIGHT,
-  WORLD_WIDTH,
-  ZONES,
-  circleHitsWall,
-  zoneAt,
-  zoneById,
-} from './world'
+import type { GameMap } from './maps'
+import { circleHitsWall, mapById } from './maps'
 
 export type GameState = 'menu' | 'playing' | 'won' | 'lost'
 
@@ -49,6 +41,25 @@ interface Enemy {
   driftAngle: number
 }
 
+interface Survivor {
+  x: number
+  y: number
+  r: number
+  hp: number
+  maxHp: number
+  speed: number
+  safe: boolean
+  hurtCooldown: number
+}
+
+interface Turret {
+  x: number
+  y: number
+  r: number
+  angle: number
+  cooldown: number
+}
+
 interface Bullet {
   x: number
   y: number
@@ -73,6 +84,12 @@ interface AmmoBox {
   amount: number
 }
 
+export interface HudSurvivor {
+  hp: number
+  maxHp: number
+  safe: boolean
+}
+
 export interface Hud {
   hp: number
   maxHp: number
@@ -83,18 +100,21 @@ export interface Hud {
   kills: number
   target: number
   missionName: string
-  zoneName: string
-  currentZoneName: string
-  inMissionZone: boolean
+  objective: string
+  mapName: string
   stings: number
   maxStings: number
   weaponName: string
   perkName: string
   scrap: number
   characterName: string
+  lives: number
+  survivors: HudSurvivor[]
+  extracted: number
+  isProtect: boolean
 }
 
-export type DeathCause = 'wounds' | 'infection'
+export type DeathCause = 'wounds' | 'infection' | 'survivor'
 
 const PLAYER_RADIUS = 16
 const PLAYER_BASE_SPEED = 260
@@ -111,6 +131,14 @@ const BURN_SLOW = 0.45
 const ACID_SHOT_INTERVAL = 5
 const IGNITE_CHANCE = 0.3
 const BUG_SPAWN_CHANCE = 0.2
+const HIVE_BUG_SPAWN_CHANCE = 0.45
+const EXTRACTION_RADIUS = 70
+const SURVIVOR_SPEED = 66
+/** Survivors only pull aggro when clearly closer than the player. */
+const SURVIVOR_AGGRO_BIAS = 0.75
+const TURRET_RANGE = 460
+const TURRET_INTERVAL = 0.55
+const TURRET_DAMAGE = 9
 
 export class Game {
   private ctx: CanvasRenderingContext2D
@@ -121,14 +149,20 @@ export class Game {
   kills = 0
   stings = 0
   scrapEarned = 0
+  extracted = 0
   deathCause: DeathCause = 'wounds'
   weapon: Weapon = weaponById('rusty-pistol')
   character: Character = characterById('nature-lover')
+  map: GameMap = mapById('streets')
 
   private player: Player = this.makePlayer(0, 0)
   private enemies: Enemy[] = []
   private bullets: Bullet[] = []
   private ammoBoxes: AmmoBox[] = []
+  private survivors: Survivor[] = []
+  private turret: Turret | null = null
+  private lives = 0
+  private safeTimer = 0
 
   private mag = this.weapon.magSize
   private reserve = this.weapon.reserveStart
@@ -224,12 +258,16 @@ export class Game {
     this.mission = mission
     this.weapon = weapon
     this.character = character
+    // Only the mission's own map is instantiated — other maps never load.
+    this.map = mapById(mission.map)
     this.kills = 0
     this.scrapEarned = 0
+    this.extracted = 0
     this.shotsFired = 0
     this.spawned = 0
     this.spawnTimer = 0
     this.stings = 0
+    this.safeTimer = 0
     this.deathCause = 'wounds'
     this.enemies = []
     this.bullets = []
@@ -239,21 +277,63 @@ export class Game {
     this.reloadTimer = 0
     this.shooting = false
     this.queuedShot = false
+    this.lives = character.extraLives
 
-    const spawn = this.playerSpawnPoint(zoneById(mission.zone))
+    const spawn = this.openSpot(PLAYER_RADIUS + 10)
     this.player = this.makePlayer(spawn.x, spawn.y)
     this.player.speed = PLAYER_BASE_SPEED * character.speedMultiplier
+
+    this.survivors = []
+    for (let i = 0; i < mission.survivors; i++) {
+      const spot = this.openSpot(20, this.player, 90, 320)
+      this.survivors.push({
+        x: spot.x,
+        y: spot.y,
+        r: 13,
+        hp: 140,
+        maxHp: 140,
+        speed: SURVIVOR_SPEED,
+        safe: false,
+        hurtCooldown: 0,
+      })
+    }
+
+    this.turret = character.turret
+      ? {
+          x: this.player.x + 40,
+          y: this.player.y,
+          r: 14,
+          angle: 0,
+          cooldown: 0,
+        }
+      : null
+    if (this.turret && circleHitsWall(this.map, this.turret.x, this.turret.y, this.turret.r)) {
+      this.turret.x = this.player.x - 40
+    }
+
     this.setState('playing')
     this.start()
   }
 
-  private playerSpawnPoint(zone: Zone) {
-    for (let i = 0; i < 500; i++) {
-      const x = zone.x + 80 + Math.random() * (zone.w - 160)
-      const y = zone.y + 80 + Math.random() * (zone.h - 160)
-      if (!circleHitsWall(x, y, PLAYER_RADIUS + 10)) return { x, y }
+  /** Finds a wall-free point, optionally within a distance band of an anchor. */
+  private openSpot(
+    radius: number,
+    anchor?: { x: number; y: number },
+    min = 0,
+    max = Infinity
+  ): { x: number; y: number } {
+    const m = this.map
+    for (let i = 0; i < 800; i++) {
+      const x = 60 + Math.random() * (m.width - 120)
+      const y = 60 + Math.random() * (m.height - 120)
+      if (circleHitsWall(m, x, y, radius)) continue
+      if (anchor) {
+        const d = Math.hypot(x - anchor.x, y - anchor.y)
+        if (d < min || d > max) continue
+      }
+      return { x, y }
     }
-    return { x: zone.x + zone.w / 2, y: zone.y + zone.h / 2 }
+    return { x: m.width / 2, y: m.height / 2 }
   }
 
   private setState(s: GameState) {
@@ -285,7 +365,6 @@ export class Game {
 
   private emitHud() {
     const mission = this.mission
-    const zone = zoneAt(this.player.x, this.player.y)
     this.onHud({
       hp: Math.max(0, Math.round(this.player.hp)),
       maxHp: this.player.maxHp,
@@ -296,15 +375,22 @@ export class Game {
       kills: this.kills,
       target: mission?.target ?? 0,
       missionName: mission?.name ?? '',
-      zoneName: mission ? zoneById(mission.zone).name : '',
-      currentZoneName: zone.name,
-      inMissionZone: mission ? zone.id === mission.zone : false,
+      objective: mission?.objective ?? '',
+      mapName: this.map.name,
       stings: this.stings,
       maxStings: MAX_STINGS,
       weaponName: this.weapon.name,
       perkName: this.weapon.perk === 'none' ? '' : this.weapon.perkName,
       scrap: this.scrapEarned,
       characterName: this.character.name,
+      lives: this.lives,
+      survivors: this.survivors.map((s) => ({
+        hp: Math.max(0, Math.round(s.hp)),
+        maxHp: s.maxHp,
+        safe: s.safe,
+      })),
+      extracted: this.extracted,
+      isProtect: mission?.type === 'protect',
     })
   }
 
@@ -312,24 +398,54 @@ export class Game {
     this.updatePlayer(dt)
     this.updateWeapon(dt)
     this.updateBullets(dt)
+    this.updateSurvivors(dt)
+    this.updateTurret(dt)
     this.updateEnemies(dt)
     this.updatePickups()
     this.updateSpawning(dt)
     this.updateCamera()
+    this.checkOutcome()
+  }
 
-    if (this.mission && this.kills >= this.mission.target) {
-      this.running = false
-      this.setState('won')
-    } else if (this.stings >= MAX_STINGS) {
+  private checkOutcome() {
+    const mission = this.mission
+    if (!mission) return
+
+    if (mission.type === 'protect') {
+      if (this.survivors.some((s) => s.hp <= 0)) {
+        this.deathCause = 'survivor'
+        this.finish('lost')
+        return
+      }
+      if (this.survivors.length && this.survivors.every((s) => s.safe)) {
+        this.finish('won')
+        return
+      }
+    } else if (this.kills >= mission.target) {
+      this.finish('won')
+      return
+    }
+
+    if (this.stings >= MAX_STINGS) {
       this.player.hp = 0
       this.deathCause = 'infection'
-      this.running = false
-      this.setState('lost')
+      this.finish('lost')
     } else if (this.player.hp <= 0) {
+      if (this.lives > 0) {
+        // Medic's field triage: burn a life instead of dying.
+        this.lives -= 1
+        this.player.hp = this.player.maxHp
+        this.player.hurtCooldown = 0.6
+        return
+      }
       this.deathCause = 'wounds'
-      this.running = false
-      this.setState('lost')
+      this.finish('lost')
     }
+  }
+
+  private finish(state: GameState) {
+    this.running = false
+    this.setState(state)
   }
 
   private updatePlayer(dt: number) {
@@ -353,16 +469,26 @@ export class Game {
     this.mouseWorld.y = this.mouseScreen.y + this.camera.y
     p.angle = Math.atan2(this.mouseWorld.y - p.y, this.mouseWorld.x - p.x)
     p.hurtCooldown = Math.max(0, p.hurtCooldown - dt)
+
+    const c = this.character
+    if (c.regenFraction > 0) {
+      this.safeTimer += dt
+      if (this.safeTimer >= c.regenInterval) {
+        this.safeTimer = 0
+        p.hp = Math.min(p.maxHp, p.hp + p.maxHp * c.regenFraction)
+      }
+    }
   }
 
   private moveCircle(e: { x: number; y: number; r: number }, dx: number, dy: number) {
+    const m = this.map
     if (dx) {
-      const nx = clamp(e.x + dx, e.r, WORLD_WIDTH - e.r)
-      if (!circleHitsWall(nx, e.y, e.r)) e.x = nx
+      const nx = clamp(e.x + dx, e.r, m.width - e.r)
+      if (!circleHitsWall(m, nx, e.y, e.r)) e.x = nx
     }
     if (dy) {
-      const ny = clamp(e.y + dy, e.r, WORLD_HEIGHT - e.r)
-      if (!circleHitsWall(e.x, ny, e.r)) e.y = ny
+      const ny = clamp(e.y + dy, e.r, m.height - e.r)
+      if (!circleHitsWall(m, e.x, ny, e.r)) e.y = ny
     }
   }
 
@@ -429,13 +555,51 @@ export class Game {
     playShot(w)
   }
 
+  private updateTurret(dt: number) {
+    const t = this.turret
+    if (!t) return
+    t.cooldown = Math.max(0, t.cooldown - dt)
+
+    let closest: Enemy | null = null
+    let best = TURRET_RANGE
+    for (const e of this.enemies) {
+      const d = Math.hypot(e.x - t.x, e.y - t.y)
+      if (d < best) {
+        best = d
+        closest = e
+      }
+    }
+    if (!closest) return
+
+    t.angle = Math.atan2(closest.y - t.y, closest.x - t.x)
+    if (t.cooldown > 0) return
+    t.cooldown = TURRET_INTERVAL
+    this.bullets.push({
+      x: t.x + Math.cos(t.angle) * (t.r + 6),
+      y: t.y + Math.sin(t.angle) * (t.r + 6),
+      vx: Math.cos(t.angle) * 900,
+      vy: Math.sin(t.angle) * 900,
+      life: 0.7,
+      maxLife: 0.7,
+      falloff: 1,
+      tracerLength: 14,
+      damage: TURRET_DAMAGE,
+      pierce: false,
+      poison: false,
+      ignite: false,
+      color: '#a78bfa',
+      width: 2,
+      hit: new Set<Enemy>(),
+    })
+  }
+
   private updateBullets(dt: number) {
     for (let i = this.bullets.length - 1; i >= 0; i--) {
       const b = this.bullets[i]
       b.x += b.vx * dt
       b.y += b.vy * dt
       b.life -= dt
-      let dead = b.life <= 0 || circleHitsWall(b.x, b.y, 2)
+      let dead = b.life <= 0 || circleHitsWall(this.map, b.x, b.y, 2)
       if (!dead) {
         for (let j = this.enemies.length - 1; j >= 0; j--) {
           const e = this.enemies[j]
@@ -460,13 +624,60 @@ export class Game {
   private killEnemy(index: number) {
     const z = this.enemies[index]
     this.enemies.splice(index, 1)
-    if (this.mission && zoneAt(z.x, z.y).id === this.mission.zone) {
-      this.kills += 1
-    }
+    this.kills += 1
     this.scrapEarned += z.kind === 'bug' ? SCRAP_PER_BUG : SCRAP_PER_KILL
     if (Math.random() < 0.22) {
       this.ammoBoxes.push({ x: z.x, y: z.y, amount: 20 })
     }
+  }
+
+  private updateSurvivors(dt: number) {
+    const exit = this.map.extraction
+    for (const s of this.survivors) {
+      if (s.safe || s.hp <= 0) continue
+      s.hurtCooldown = Math.max(0, s.hurtCooldown - dt)
+      const dx = exit.x - s.x
+      const dy = exit.y - s.y
+      const d = Math.hypot(dx, dy) || 1
+      if (d < EXTRACTION_RADIUS) {
+        s.safe = true
+        this.extracted += 1
+        continue
+      }
+      const step = s.speed * dt
+      const base = Math.atan2(dy, dx)
+      // Walk around blocking walls instead of grinding into them.
+      for (const offset of [0, 0.6, -0.6, 1.2, -1.2, 1.9, -1.9, 2.6, -2.6]) {
+        const a = base + offset
+        const nx = s.x + Math.cos(a) * step
+        const ny = s.y + Math.sin(a) * step
+        if (circleHitsWall(this.map, nx, ny, s.r)) continue
+        s.x = nx
+        s.y = ny
+        break
+      }
+    }
+  }
+
+  /** Enemies prefer whichever survivor or the player is closest. */
+  private targetFor(z: Enemy): { x: number; y: number; kind: 'player' | 'survivor'; ref: Survivor | null } {
+    const p = this.player
+    let best: { x: number; y: number; kind: 'player' | 'survivor'; ref: Survivor | null } = {
+      x: p.x,
+      y: p.y,
+      kind: 'player',
+      ref: null,
+    }
+    let bestD = Math.hypot(p.x - z.x, p.y - z.y)
+    for (const s of this.survivors) {
+      if (s.safe || s.hp <= 0) continue
+      const d = Math.hypot(s.x - z.x, s.y - z.y)
+      if (d < bestD * SURVIVOR_AGGRO_BIAS) {
+        bestD = d
+        best = { x: s.x, y: s.y, kind: 'survivor', ref: s }
+      }
+    }
+    return best
   }
 
   private updateEnemies(dt: number) {
@@ -487,17 +698,19 @@ export class Game {
         continue
       }
       z.speed = z.burn > 0 ? z.baseSpeed * BURN_SLOW : z.baseSpeed
-      const dx = p.x - z.x
-      const dy = p.y - z.y
+
+      const target = this.targetFor(z)
+      const dx = target.x - z.x
+      const dy = target.y - z.y
       const d = Math.hypot(dx, dy) || 1
       const step = z.speed * dt
       const wob = Math.sin(z.wobble * 4) * 0.25
       z.retreat = Math.max(0, z.retreat - dt)
 
-      const sight = z.vision * this.character.aggroMultiplier
+      // Camouflage only hides the player; survivors are spotted normally.
+      const sight = z.vision * (target.kind === 'player' ? this.character.aggroMultiplier : 1)
       z.aware = z.aware ? d < sight * VISION_HYSTERESIS : d < sight
       if (!z.aware) {
-        // Unaware enemies shamble aimlessly until the player is spotted.
         z.driftAngle += (Math.random() - 0.5) * dt * 2
         this.moveCircle(
           z,
@@ -515,16 +728,26 @@ export class Game {
       this.moveCircle(z, (ux + px) * step, (uy + py) * step)
 
       z.attackCooldown = Math.max(0, z.attackCooldown - dt)
-      if (d < z.r + p.r && z.attackCooldown === 0) {
-        if (z.kind === 'bug') {
+      const victim = target.ref
+      const reach = z.r + (victim ? victim.r : p.r)
+      if (d < reach && z.attackCooldown === 0) {
+        if (victim) {
+          victim.hp -= z.kind === 'bug' ? 8 : 6
+          victim.hurtCooldown = 0.25
+          z.attackCooldown = z.kind === 'bug' ? 1.8 : 1.2
+          if (z.kind === 'bug') z.retreat = 0.9
+        } else if (z.kind === 'bug') {
           this.stings += 1
           z.attackCooldown = 2.2
           z.retreat = 1.1
+          p.hurtCooldown = 0.25
+          this.safeTimer = 0
         } else {
           p.hp -= 8
           z.attackCooldown = 0.7
+          p.hurtCooldown = 0.25
+          this.safeTimer = 0
         }
-        p.hurtCooldown = 0.25
       }
     }
   }
@@ -543,21 +766,24 @@ export class Game {
   private updateSpawning(dt: number) {
     const mission = this.mission
     if (!mission) return
-    const zone = zoneById(mission.zone)
-    const remaining = mission.target - this.kills
-    const maxAlive = Math.min(14, Math.max(4, Math.ceil(mission.target / 3)))
+    const protect = mission.type === 'protect'
+    const maxAlive = protect
+      ? 3 + mission.survivors
+      : Math.min(14, Math.max(4, Math.ceil(mission.target / 3)))
     if (this.enemies.length >= maxAlive) return
-    if (this.spawned - this.kills >= remaining + 4) return
+    if (!protect) {
+      const remaining = mission.target - this.kills
+      if (this.spawned - this.kills >= remaining + 4) return
+    }
 
     this.spawnTimer -= dt
     if (this.spawnTimer > 0) return
-    this.spawnTimer = 0.9
+    this.spawnTimer = protect ? 2.4 : 0.9
 
-    const spot = this.spawnPoint(zone)
+    const spot = this.spawnPoint()
     if (!spot) return
-    this.enemies.push(
-      Math.random() < BUG_SPAWN_CHANCE ? this.makeBug(spot) : this.makeZombie(spot)
-    )
+    const bugChance = mission.type === 'hive' ? HIVE_BUG_SPAWN_CHANCE : BUG_SPAWN_CHANCE
+    this.enemies.push(Math.random() < bugChance ? this.makeBug(spot) : this.makeZombie(spot))
     this.spawned += 1
   }
 
@@ -602,42 +828,44 @@ export class Game {
     }
   }
 
-  private spawnPoint(zone: Zone) {
+  private spawnPoint() {
+    const m = this.map
     const p = this.player
-    for (let i = 0; i < 200; i++) {
-      const x = zone.x + 40 + Math.random() * (zone.w - 80)
-      const y = zone.y + 40 + Math.random() * (zone.h - 80)
+    for (let i = 0; i < 300; i++) {
+      const x = 40 + Math.random() * (m.width - 80)
+      const y = 40 + Math.random() * (m.height - 80)
       const d = Math.hypot(x - p.x, y - p.y)
-      if (d < 420 || d > 1400) continue
-      if (circleHitsWall(x, y, 22)) continue
+      if (d < 380 || d > 1300) continue
+      if (circleHitsWall(m, x, y, 22)) continue
       return { x, y }
     }
     return null
   }
 
   private updateCamera() {
-    this.camera.x = clamp(this.player.x - this.viewW / 2, 0, Math.max(0, WORLD_WIDTH - this.viewW))
-    this.camera.y = clamp(this.player.y - this.viewH / 2, 0, Math.max(0, WORLD_HEIGHT - this.viewH))
+    const m = this.map
+    this.camera.x = clamp(this.player.x - this.viewW / 2, 0, Math.max(0, m.width - this.viewW))
+    this.camera.y = clamp(this.player.y - this.viewH / 2, 0, Math.max(0, m.height - this.viewH))
   }
 
   private render() {
     const ctx = this.ctx
+    const m = this.map
     ctx.fillStyle = '#0b0f0d'
     ctx.fillRect(0, 0, this.viewW, this.viewH)
     ctx.save()
     ctx.translate(-this.camera.x, -this.camera.y)
 
-    for (const z of ZONES) {
-      ctx.fillStyle = z.color
-      ctx.fillRect(z.x, z.y, z.w, z.h)
-    }
+    ctx.fillStyle = m.color
+    ctx.fillRect(0, 0, m.width, m.height)
     this.drawGrid()
-    this.drawZoneLabels()
+    this.drawMapLabel()
+    if (this.mission?.type === 'protect') this.drawExtraction()
 
-    ctx.fillStyle = '#8b5a2b'
-    ctx.strokeStyle = '#5c3a1c'
+    ctx.fillStyle = m.wallColor
+    ctx.strokeStyle = m.wallEdge
     ctx.lineWidth = 3
-    for (const w of WALLS) {
+    for (const w of m.walls) {
       ctx.fillRect(w.x, w.y, w.w, w.h)
       ctx.strokeRect(w.x, w.y, w.w, w.h)
     }
@@ -649,6 +877,9 @@ export class Game {
       ctx.lineWidth = 2
       ctx.strokeRect(a.x - 8, a.y - 6, 16, 12)
     }
+
+    for (const s of this.survivors) this.drawSurvivor(s)
+    if (this.turret) this.drawTurret(this.turret)
 
     for (const e of this.enemies) {
       if (e.kind === 'bug') this.drawBug(e)
@@ -673,6 +904,72 @@ export class Game {
 
     this.drawCrosshair()
     this.drawMinimap()
+  }
+
+  private drawExtraction() {
+    const ctx = this.ctx
+    const { x, y } = this.map.extraction
+    ctx.save()
+    ctx.setLineDash([14, 10])
+    ctx.strokeStyle = 'rgba(61,220,132,0.85)'
+    ctx.lineWidth = 4
+    ctx.beginPath()
+    ctx.arc(x, y, EXTRACTION_RADIUS, 0, Math.PI * 2)
+    ctx.stroke()
+    ctx.setLineDash([])
+    ctx.fillStyle = 'rgba(61,220,132,0.12)'
+    ctx.fill()
+    ctx.fillStyle = 'rgba(61,220,132,0.9)'
+    ctx.font = 'bold 18px ui-sans-serif, system-ui, sans-serif'
+    ctx.textAlign = 'center'
+    ctx.fillText('EXTRACTION', x, y + 6)
+    ctx.textAlign = 'left'
+    ctx.restore()
+  }
+
+  private drawSurvivor(s: Survivor) {
+    const ctx = this.ctx
+    ctx.beginPath()
+    ctx.arc(s.x, s.y, s.r, 0, Math.PI * 2)
+    ctx.fillStyle = s.safe ? '#94a3b8' : s.hurtCooldown > 0 ? '#fecaca' : '#e2e8f0'
+    ctx.fill()
+    ctx.strokeStyle = '#0f172a'
+    ctx.lineWidth = 2
+    ctx.stroke()
+
+    const bw = 40
+    const bh = 6
+    const bx = s.x - bw / 2
+    const by = s.y - s.r - 14
+    ctx.fillStyle = 'rgba(0,0,0,0.6)'
+    ctx.fillRect(bx - 1, by - 1, bw + 2, bh + 2)
+    const pct = Math.max(0, s.hp) / s.maxHp
+    ctx.fillStyle = pct > 0.5 ? '#22c55e' : pct > 0.25 ? '#f59e0b' : '#ef4444'
+    ctx.fillRect(bx, by, bw * pct, bh)
+    if (s.safe) {
+      ctx.fillStyle = '#22c55e'
+      ctx.font = 'bold 11px ui-sans-serif, system-ui, sans-serif'
+      ctx.textAlign = 'center'
+      ctx.fillText('SAFE', s.x, by - 5)
+      ctx.textAlign = 'left'
+    }
+  }
+
+  private drawTurret(t: Turret) {
+    const ctx = this.ctx
+    ctx.save()
+    ctx.translate(t.x, t.y)
+    ctx.beginPath()
+    ctx.arc(0, 0, t.r, 0, Math.PI * 2)
+    ctx.fillStyle = '#6d28d9'
+    ctx.fill()
+    ctx.strokeStyle = '#c4b5fd'
+    ctx.lineWidth = 2
+    ctx.stroke()
+    ctx.rotate(t.angle)
+    ctx.fillStyle = '#c4b5fd'
+    ctx.fillRect(t.r - 3, -3, 18, 6)
+    ctx.restore()
   }
 
   private drawStatusRing(e: Enemy) {
@@ -740,15 +1037,14 @@ export class Game {
     ctx.stroke()
   }
 
-  private drawZoneLabels() {
+  private drawMapLabel() {
     const ctx = this.ctx
+    const m = this.map
     ctx.font = 'bold 64px ui-sans-serif, system-ui, sans-serif'
     ctx.textAlign = 'center'
     ctx.fillStyle = 'rgba(255,255,255,0.06)'
-    for (const z of ZONES) {
-      ctx.fillText(z.name.toUpperCase(), z.x + z.w / 2, 140)
-      ctx.fillText(z.name.toUpperCase(), z.x + z.w / 2, WORLD_HEIGHT - 100)
-    }
+    ctx.fillText(m.name.toUpperCase(), m.width / 2, 140)
+    ctx.fillText(m.name.toUpperCase(), m.width / 2, m.height - 100)
     ctx.textAlign = 'left'
   }
 
@@ -792,11 +1088,12 @@ export class Game {
 
   private drawMinimap() {
     const ctx = this.ctx
+    const m = this.map
     const mw = 240
-    const mh = (mw * WORLD_HEIGHT) / WORLD_WIDTH
+    const mh = (mw * m.height) / m.width
     const mx = this.viewW - mw - 20
     const my = this.viewH - mh - 20
-    const s = mw / WORLD_WIDTH
+    const s = mw / m.width
 
     ctx.save()
     ctx.globalAlpha = 0.9
@@ -806,19 +1103,27 @@ export class Game {
     ctx.lineWidth = 2
     ctx.strokeRect(mx - 6, my - 6, mw + 12, mh + 12)
 
-    for (const z of ZONES) {
-      ctx.fillStyle = z.color
-      ctx.fillRect(mx + z.x * s, my + z.y * s, z.w * s, z.h * s)
-      if (this.mission && z.id === this.mission.zone) {
-        ctx.strokeStyle = '#f4c542'
-        ctx.lineWidth = 2
-        ctx.strokeRect(mx + z.x * s + 1, my + z.y * s + 1, z.w * s - 2, z.h * s - 2)
-      }
+    ctx.fillStyle = m.color
+    ctx.fillRect(mx, my, mw, mh)
+
+    ctx.fillStyle = m.wallColor
+    for (const w of m.walls) {
+      ctx.fillRect(mx + w.x * s, my + w.y * s, Math.max(1, w.w * s), Math.max(1, w.h * s))
     }
 
-    ctx.fillStyle = 'rgba(139,90,43,0.9)'
-    for (const w of WALLS) {
-      ctx.fillRect(mx + w.x * s, my + w.y * s, Math.max(1, w.w * s), Math.max(1, w.h * s))
+    if (this.mission?.type === 'protect') {
+      ctx.strokeStyle = '#3ddc84'
+      ctx.lineWidth = 2
+      ctx.beginPath()
+      ctx.arc(mx + m.extraction.x * s, my + m.extraction.y * s, 6, 0, Math.PI * 2)
+      ctx.stroke()
+      ctx.fillStyle = '#e2e8f0'
+      for (const sv of this.survivors) {
+        if (sv.hp <= 0) continue
+        ctx.beginPath()
+        ctx.arc(mx + sv.x * s, my + sv.y * s, 3, 0, Math.PI * 2)
+        ctx.fill()
+      }
     }
 
     for (const e of this.enemies) {
@@ -828,16 +1133,21 @@ export class Game {
       ctx.fill()
     }
 
-    ctx.fillStyle = '#3ddc84'
+    if (this.turret) {
+      ctx.fillStyle = '#a78bfa'
+      ctx.beginPath()
+      ctx.arc(mx + this.turret.x * s, my + this.turret.y * s, 3, 0, Math.PI * 2)
+      ctx.fill()
+    }
+
+    ctx.fillStyle = this.character.color
     ctx.beginPath()
     ctx.arc(mx + this.player.x * s, my + this.player.y * s, 4, 0, Math.PI * 2)
     ctx.fill()
 
     ctx.font = '11px ui-sans-serif, system-ui, sans-serif'
     ctx.fillStyle = 'rgba(255,255,255,0.7)'
-    for (const z of ZONES) {
-      ctx.fillText(z.name, mx + z.x * s + 4, my + 14)
-    }
+    ctx.fillText(m.name, mx + 4, my + 14)
     ctx.restore()
   }
 }
