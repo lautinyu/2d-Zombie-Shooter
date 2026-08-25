@@ -321,41 +321,75 @@ export class Game {
     return this.players.filter((p) => !p.down)
   }
 
-  private bindInput() {
-    window.addEventListener('keydown', (e) => {
-      this.keys.add(e.key.toLowerCase())
-      if (['arrowup', 'arrowdown', 'arrowleft', 'arrowright', ' '].includes(e.key.toLowerCase())) {
-        e.preventDefault()
-      }
-      const key = e.key.toLowerCase()
-      const p2 = this.players[1]
-      if (key === 'r') this.startReload(this.p1)
-      if (key === '.' && p2) p2.queuedShot = true
-      if (key === 'e') this.useAbility(this.p1)
-      if (key === 'm' && p2) this.useAbility(p2)
-      if (key === 'q') this.deployBarricade(this.p1)
-      if (key === ',' && p2) this.deployBarricade(p2)
-    })
-    window.addEventListener('keyup', (e) => this.keys.delete(e.key.toLowerCase()))
-    window.addEventListener('blur', () => this.keys.clear())
+  /** Both the layout key and the physical code, so held keys survive anything. */
+  private keyNames(e: KeyboardEvent): string[] {
+    const names = [e.key.toLowerCase()]
+    const code = e.code.toLowerCase()
+    if (code.startsWith('key')) names.push(code.slice(3))
+    else if (code.startsWith('digit')) names.push(code.slice(5))
+    else if (code.startsWith('numpad')) names.push(code.slice(6))
+    else if (code) names.push(code)
+    return names
+  }
 
-    this.canvas.addEventListener('mousemove', (e) => {
+  private bindInput() {
+    // Movement lives purely in this key set. Nothing on the pointer path ever
+    // writes to it, so holding fire cannot disturb a run in progress.
+    window.addEventListener(
+      'keydown',
+      (e) => {
+        for (const name of this.keyNames(e)) this.keys.add(name)
+        if (['arrowup', 'arrowdown', 'arrowleft', 'arrowright', ' '].includes(e.key.toLowerCase())) {
+          e.preventDefault()
+        }
+        if (e.repeat) return
+        const key = e.key.toLowerCase()
+        const p2 = this.players[1]
+        if (key === 'r') this.startReload(this.p1)
+        if (key === '.' && p2) p2.queuedShot = true
+        if (key === 'e') this.useAbility(this.p1)
+        if (key === 'm' && p2) this.useAbility(p2)
+        if (key === 'q') this.deployBarricade(this.p1)
+        if (key === ',' && p2) this.deployBarricade(p2)
+      },
+      { capture: true }
+    )
+    window.addEventListener(
+      'keyup',
+      (e) => {
+        for (const name of this.keyNames(e)) this.keys.delete(name)
+      },
+      { capture: true }
+    )
+    window.addEventListener('blur', () => {
+      this.keys.clear()
+      for (const p of this.players) p.shooting = false
+    })
+
+    const aimAt = (e: MouseEvent) => {
       const rect = this.canvas.getBoundingClientRect()
       this.mouseScreen.x = e.clientX - rect.left
       this.mouseScreen.y = e.clientY - rect.top
+    }
+    window.addEventListener('mousemove', aimAt)
+    // Pointer events on the window: the shot registers even if the press lands
+    // on a HUD overlay, and the browser never starts a canvas drag or a text
+    // selection that would swallow the keyboard while the button is held.
+    window.addEventListener('pointerdown', (e) => {
+      if (e.button !== 0 || this.state !== 'playing' || !this.p1) return
+      aimAt(e)
+      this.p1.shooting = true
+      this.p1.queuedShot = true
     })
-    this.canvas.addEventListener('mousedown', (e) => {
-      // Without this the browser starts a canvas drag, which swallows every
-      // keydown until the button is released — no running while shooting.
-      e.preventDefault()
-      if (e.button === 0 && this.p1) {
-        this.p1.shooting = true
-        this.p1.queuedShot = true
-      }
+    const release = () => {
+      if (this.p1) this.p1.shooting = false
+    }
+    window.addEventListener('pointerup', (e) => {
+      if (e.button === 0) release()
     })
-    window.addEventListener('mouseup', (e) => {
-      if (e.button === 0 && this.p1) this.p1.shooting = false
-    })
+    window.addEventListener('pointercancel', release)
+    this.canvas.addEventListener('dragstart', (e) => e.preventDefault())
+    this.canvas.addEventListener('selectstart', (e) => e.preventDefault())
     this.canvas.addEventListener('contextmenu', (e) => e.preventDefault())
   }
 

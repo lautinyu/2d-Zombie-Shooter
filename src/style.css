@@ -10,7 +10,8 @@ body,
   font-family: ui-sans-serif, system-ui, sans-serif;
 }
 
-/* Dragging the canvas would steal keyboard focus mid-firefight. */
+/* A drag or text selection started by holding fire would swallow the keyboard. */
+#app,
 canvas {
   user-select: none;
   -webkit-user-drag: none;
