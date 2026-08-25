@@ -1,6 +1,5 @@
 import type { CharacterId } from './characters'
 import { CHARACTERS } from './characters'
-import type { PathId } from './missions'
 import { MISSIONS } from './missions'
 import type { TexturePack } from './theme'
 import type { WeaponId } from './weapons'
@@ -19,8 +18,6 @@ export interface Profile {
   players: 1 | 2
   /** Mission ids already cleared. */
   completed: string[]
-  /** Campaign branch the player committed to. */
-  path: PathId | null
   /** Chosen render style; null until the intro splash is answered. */
   textures: TexturePack | null
 }
@@ -33,7 +30,6 @@ const DEFAULT_PROFILE: Profile = {
   character2: null,
   players: 1,
   completed: [],
-  path: null,
   textures: null,
 }
 
@@ -47,10 +43,6 @@ function isCharacterId(value: unknown): value is CharacterId {
 
 function isMissionId(value: unknown): value is string {
   return typeof value === 'string' && MISSIONS.some((m) => m.id === value)
-}
-
-function isPathId(value: unknown): value is PathId {
-  return value === 'combat' || value === 'rescue'
 }
 
 function isTexturePack(value: unknown): value is TexturePack {
@@ -79,7 +71,6 @@ export function loadProfile(): Profile {
       character2: isCharacterId(record.character2) ? record.character2 : null,
       players: record.players === 2 ? 2 : 1,
       completed: Array.isArray(record.completed) ? record.completed.filter(isMissionId) : [],
-      path: isPathId(record.path) ? record.path : null,
       textures: isTexturePack(record.textures) ? record.textures : null,
     }
   } catch {

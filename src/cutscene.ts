@@ -1,5 +1,6 @@
 import { characterById } from './characters'
 import type { CharacterId } from './characters'
+import type { BossKind } from './missions'
 import { drawCharacterSkin } from './skins'
 import { playMusic, playSfx, resumeAudio, stopMusic } from './audio'
 
@@ -113,8 +114,50 @@ export function playStoryIntro(onDone: () => void) {
   skip.addEventListener('click', finish)
 }
 
-function bossDialogue(id: CharacterId): Line[] {
+function bossDialogue(id: CharacterId, boss: BossKind): Line[] {
   const hero = characterById(id).name
+  if (boss === 'runner-alpha') {
+    return [
+      {
+        speaker: hero,
+        text: 'Hold on... something is moving way too fast on the radar.',
+        side: 'left',
+      },
+      {
+        speaker: 'Survivor',
+        text: "That's the Alpha! It was a track star before the outbreak. Watch your flanks!",
+        side: 'right',
+      },
+    ]
+  }
+  if (boss === 'camo-stalker') {
+    return [
+      {
+        speaker: hero,
+        text: "Hey, are you alright? We're here to get you out.",
+        side: 'left',
+      },
+      {
+        speaker: 'Survivor',
+        text: 'FRESH MEAT...',
+        side: 'right',
+      },
+    ]
+  }
+  if (boss === 'brood-matron') {
+    return [
+      {
+        speaker: 'Survivor 1',
+        text: 'The whole skyline went dark an hour ago. That was not a cloud — that was her brood.',
+        side: 'right',
+      },
+      {
+        speaker: hero,
+        text: 'Then we take the roof back before she lays another wave. Keep your eyes up.',
+        side: 'left',
+      },
+    ]
+  }
   return [
     {
       speaker: 'Survivor 1',
@@ -188,10 +231,10 @@ function drawSurvivors() {
 }
 
 /** Typewriter dialogue before the finale; resolves when the last line is read. */
-export function playBossDialogue(id: CharacterId, onDone: () => void) {
+export function playBossDialogue(id: CharacterId, boss: BossKind, onDone: () => void) {
   resumeAudio()
   playMusic('story')
-  const lines = bossDialogue(id)
+  const lines = bossDialogue(id, boss)
   const { dialogue } = panelsReady()
   const speakerEl = document.getElementById('cutscene-speaker')
   const textEl = document.getElementById('cutscene-text')

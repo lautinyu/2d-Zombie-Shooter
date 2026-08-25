@@ -1,8 +1,17 @@
 import './style.css'
 import { Game } from './game'
 import type { GameState, Hud } from './game'
-import { MISSIONS, missionMapName, missionUnlocked, pathComplete, pathMissions } from './missions'
-import type { Mission, PathId } from './missions'
+import {
+  BOSSES_REQUIRED,
+  MISSIONS,
+  PATHS,
+  bossesDefeated,
+  missionMapName,
+  missionUnlocked,
+  pathComplete,
+  pathMissions,
+} from './missions'
+import type { Mission, PathInfo } from './missions'
 import { RadarChart } from './radar'
 import { WEAPONS, weaponById } from './weapons'
 import type { Weapon, WeaponId } from './weapons'
@@ -225,7 +234,7 @@ const campaignEl = el('campaign')
 let currentMission: Mission = MISSIONS[0]
 
 function unlocked(m: Mission) {
-  return missionUnlocked(m, profile.completed, profile.path)
+  return missionUnlocked(m, profile.completed)
 }
 
 function missionCard(m: Mission): HTMLElement {
@@ -262,31 +271,28 @@ function missionCard(m: Mission): HTMLElement {
   return card
 }
 
-function branchColumn(path: PathId, title: string, blurb: string): HTMLElement {
+function branchColumn(path: PathInfo): HTMLElement {
   const col = document.createElement('div')
-  const committed = profile.path === path
-  const finished = pathComplete(path, profile.completed)
-  const lockedOut = profile.path !== null && !committed && !pathComplete(profile.path, profile.completed)
+  const finished = pathComplete(path.id, profile.completed)
+  const started = pathMissions(path.id).some((m) => profile.completed.includes(m.id))
   col.className = `rounded-2xl p-4 ring-1 ${
-    committed ? 'bg-emerald-500/5 ring-emerald-400/40' : 'bg-white/5 ring-white/10'
+    finished ? 'bg-emerald-500/5 ring-emerald-400/40' : 'bg-white/5 ring-white/10'
   }`
   const status = finished
     ? '<span class="text-[11px] font-bold text-emerald-300">PATH COMPLETE</span>'
-    : committed
-      ? '<span class="text-[11px] font-bold text-emerald-300">COMMITTED</span>'
-      : lockedOut
-        ? '<span class="text-[11px] font-bold text-amber-300">LOCKED OUT</span>'
-        : ''
+    : started
+      ? '<span class="text-[11px] font-bold text-sky-300">IN PROGRESS</span>'
+      : ''
   col.innerHTML = `
     <div class="flex items-center justify-between">
-      <h3 class="text-sm font-black uppercase tracking-wider text-white">${title}</h3>
+      <h3 class="text-sm font-black uppercase tracking-wider text-white">${path.title}</h3>
       ${status}
     </div>
-    <p class="mt-1 text-xs text-slate-400">${blurb}</p>
+    <p class="mt-1 text-xs text-slate-400">${path.blurb}</p>
   `
   const list = document.createElement('div')
   list.className = 'mt-3 space-y-3'
-  for (const m of pathMissions(path)) list.appendChild(missionCard(m))
+  for (const m of pathMissions(path.id)) list.appendChild(missionCard(m))
   col.appendChild(list)
   return col
 }
@@ -299,7 +305,7 @@ function renderCampaign() {
   const prologue = document.createElement('div')
   prologue.className = 'rounded-2xl bg-white/5 p-4 ring-1 ring-white/10'
   prologue.innerHTML =
-    '<h3 class="text-sm font-black uppercase tracking-wider text-white">Prologue</h3><p class="mt-1 text-xs text-slate-400">Clear this to open both branches.</p>'
+    '<h3 class="text-sm font-black uppercase tracking-wider text-white">Prologue</h3><p class="mt-1 text-xs text-slate-400">Clear this to open all three paths.</p>'
   const first = document.createElement('div')
   first.className = 'mt-3'
   first.appendChild(missionCard(MISSIONS[0]))
@@ -307,34 +313,32 @@ function renderCampaign() {
 
   const note = document.createElement('div')
   note.className = 'rounded-2xl bg-black/30 p-4 text-xs text-slate-400 ring-1 ring-white/10'
+  const bosses = bossesDefeated(profile.completed)
   note.innerHTML = `
     <span class="font-semibold text-slate-200">Campaign paths:</span>
-    picking a mission on one branch commits you to it — the other branch stays locked until your
-    branch is finished. Branch missions run on their own dedicated maps and pay 40–80% more scrap.
-    ${profile.path ? `<div class="mt-2 font-semibold text-emerald-300">Current branch: ${profile.path === 'combat' ? 'Combat Focus' : 'Rescue Focus'}${pathComplete(profile.path, profile.completed) ? ' (complete — both branches open)' : ''}</div>` : ''}
+    all three branches run in parallel — clearing a mission opens the next stage on that branch,
+    each on its own dedicated map, paying 40–140% more scrap. Every path ends in its own boss.
+    <div class="mt-2 font-semibold ${bosses >= BOSSES_REQUIRED ? 'text-emerald-300' : 'text-amber-300'}">
+      Path bosses defeated: ${bosses}/${BOSSES_REQUIRED} needed to open The Infected Hive.
+    </div>
   `
   intro.appendChild(prologue)
   intro.appendChild(note)
   campaignEl.appendChild(intro)
 
   const branches = document.createElement('div')
-  branches.className = 'grid gap-4 md:grid-cols-2'
-  branches.appendChild(
-    branchColumn('combat', 'Path A · Combat Focus', 'Hunt the horde and break the infected hive.')
-  )
-  branches.appendChild(
-    branchColumn('rescue', 'Path B · Rescue Focus', 'Escort survivors out alive — one death fails the run.')
-  )
+  branches.className = 'grid gap-4 md:grid-cols-3'
+  for (const path of PATHS) branches.appendChild(branchColumn(path))
   campaignEl.appendChild(branches)
 
-  const finale = MISSIONS.find((m) => m.requiresAllPaths)
+  const finale = MISSIONS.find((m) => m.requiresPathBosses)
   if (finale) {
     const wrap = document.createElement('div')
     wrap.className = `rounded-2xl p-4 ring-1 ${
       unlocked(finale) ? 'bg-orange-500/5 ring-orange-400/40' : 'bg-white/5 ring-white/10'
     }`
     wrap.innerHTML =
-      '<h3 class="text-sm font-black uppercase tracking-wider text-orange-300">Finale · Boss Fight</h3><p class="mt-1 text-xs text-slate-400">Clear both branches to face the Mutated Alpha Bug that started the plague.</p>'
+      `<h3 class="text-sm font-black uppercase tracking-wider text-orange-300">Finale · Boss Fight</h3><p class="mt-1 text-xs text-slate-400">Kill ${BOSSES_REQUIRED} path bosses to open the door to the Mutated Alpha Bug that started the plague.</p>`
     const holder = document.createElement('div')
     holder.className = 'mt-3'
     holder.appendChild(missionCard(finale))
@@ -453,17 +457,13 @@ function startGameFlow() {
 
 function launch(m: Mission) {
   currentMission = m
-  if (m.path && profile.path === null) {
-    profile.path = m.path
-    persist()
-  }
   const roster = [characterById(activeCharacter())]
   if (profile.players === 2) roster.push(characterById(secondCharacter()))
   const begin = () => game.startMission(m, weaponById(profile.equipped), roster)
-  // The finale opens with a character-driven briefing scene.
+  // Every boss opens with a character-driven briefing scene.
   if (m.type === 'boss') {
     show(menu, false)
-    playBossDialogue(activeCharacter(), begin)
+    playBossDialogue(activeCharacter(), m.boss ?? 'hive-mother', begin)
     return
   }
   begin()

@@ -9,7 +9,16 @@ export interface Rect {
   kind?: StructureKind
 }
 
-export type MapId = 'streets' | 'warehouse' | 'hive' | 'refuge'
+export type MapId =
+  | 'streets'
+  | 'warehouse'
+  | 'hive'
+  | 'refuge'
+  | 'alley'
+  | 'rooftop'
+  | 'highway'
+  | 'deadend'
+  | 'fogward'
 
 /** Ground texture painted under everything else. */
 export type FloorStyle = 'asphalt' | 'wood' | 'organic' | 'dirt'
@@ -177,7 +186,166 @@ const REFUGE: GameMap = {
   ],
 }
 
-export const MAPS: GameMap[] = [STREETS, WAREHOUSE, HIVE, REFUGE]
+/** Path 1: claustrophobic back alleys behind the quarantine line. */
+const ALLEY: GameMap = {
+  id: 'alley',
+  name: 'City Alleys',
+  width: 1500,
+  height: 1300,
+  color: '#1d2024',
+  wallColor: '#6f5340',
+  wallEdge: '#42301f',
+  floor: 'asphalt',
+  accent: '#ffcf8a',
+  extraction: { x: 1360, y: 1160 },
+  walls: [
+    ...border(1500, 1300),
+    // Long tenement blocks leaving narrow lanes between them.
+    { x: 140, y: 140, w: 380, h: 220 },
+    { x: 640, y: 140, w: 240, h: 380 },
+    { x: 1000, y: 140, w: 360, h: 200 },
+    { x: 140, y: 520, w: 300, h: 240 },
+    { x: 1080, y: 460, w: 280, h: 300 },
+    { x: 560, y: 660, w: 320, h: 190 },
+    { x: 140, y: 920, w: 340, h: 240 },
+    { x: 620, y: 1000, w: 260, h: 160 },
+    { x: 1020, y: 920, w: 200, h: 240 },
+    ...partitions([
+      { x: 460, y: 400, w: 90, h: 90 },
+      { x: 940, y: 700, w: 90, h: 90 },
+      { x: 520, y: 900, w: 70, h: 70 },
+    ]),
+  ],
+}
+
+/** Path 2: wide open rooftops where the swarm owns the sky. */
+const ROOFTOP: GameMap = {
+  id: 'rooftop',
+  name: 'The Rooftops',
+  width: 1900,
+  height: 1500,
+  color: '#3b3f45',
+  wallColor: '#8d9299',
+  wallEdge: '#4d5359',
+  floor: 'wood',
+  accent: '#cde5ff',
+  extraction: { x: 1740, y: 1340 },
+  walls: [
+    ...border(1900, 1500),
+    ...partitions([
+      // Low parapets, vents and stair housings — plenty of open sky.
+      { x: 420, y: 300, w: 260, h: 40 },
+      { x: 1180, y: 300, w: 300, h: 40 },
+      { x: 300, y: 700, w: 40, h: 260 },
+      { x: 1560, y: 620, w: 40, h: 300 },
+      { x: 780, y: 640, w: 220, h: 140 },
+      { x: 620, y: 1120, w: 320, h: 40 },
+      { x: 1240, y: 1080, w: 40, h: 260 },
+      { x: 980, y: 260, w: 80, h: 80 },
+      { x: 500, y: 980, w: 80, h: 80 },
+    ]),
+  ],
+}
+
+/** Path 3: a barricaded stretch of highway used as an evacuation lane. */
+const HIGHWAY: GameMap = {
+  id: 'highway',
+  name: 'The Evac Highway',
+  width: 2000,
+  height: 1200,
+  color: '#26282c',
+  wallColor: '#7b7f86',
+  wallEdge: '#464a50',
+  floor: 'asphalt',
+  accent: '#ffe08a',
+  extraction: { x: 1840, y: 600 },
+  walls: [
+    ...border(2000, 1200),
+    ...partitions([
+      // Jersey barriers and stalled traffic forming a guarded corridor.
+      { x: 240, y: 300, w: 320, h: 44 },
+      { x: 700, y: 300, w: 380, h: 44 },
+      { x: 1240, y: 300, w: 420, h: 44 },
+      { x: 240, y: 860, w: 380, h: 44 },
+      { x: 780, y: 860, w: 340, h: 44 },
+      { x: 1300, y: 860, w: 400, h: 44 },
+      { x: 520, y: 520, w: 120, h: 70 },
+      { x: 980, y: 620, w: 120, h: 70 },
+      { x: 1480, y: 500, w: 120, h: 70 },
+      { x: 300, y: 640, w: 120, h: 70 },
+    ]),
+  ],
+}
+
+/** Runner Alpha arena: a debris-choked dead end. */
+const DEADEND: GameMap = {
+  id: 'deadend',
+  name: 'The Dead End',
+  width: 1500,
+  height: 1200,
+  color: '#191b1f',
+  wallColor: '#6b4a34',
+  wallEdge: '#3d2919',
+  floor: 'asphalt',
+  accent: '#ff9d6b',
+  extraction: { x: 1340, y: 1060 },
+  walls: [
+    ...border(1500, 1200),
+    { x: 120, y: 120, w: 260, h: 260 },
+    { x: 1120, y: 120, w: 260, h: 260 },
+    { x: 120, y: 820, w: 260, h: 260 },
+    { x: 1120, y: 820, w: 260, h: 260 },
+    ...partitions([
+      // Skips and rubble piles the Alpha vaults over.
+      { x: 560, y: 220, w: 140, h: 90 },
+      { x: 840, y: 460, w: 120, h: 120 },
+      { x: 480, y: 700, w: 150, h: 100 },
+      { x: 900, y: 880, w: 130, h: 90 },
+    ]),
+  ],
+}
+
+/** Camo Stalker arena: a fogged-in loading dock. */
+const FOGWARD: GameMap = {
+  id: 'fogward',
+  name: 'The Fog Ward',
+  width: 1600,
+  height: 1400,
+  color: '#20262b',
+  wallColor: '#5f6b6f',
+  wallEdge: '#333c40',
+  floor: 'wood',
+  accent: '#a8e6d6',
+  extraction: { x: 1440, y: 1240 },
+  walls: [
+    ...border(1600, 1400),
+    ...partitions([
+      { x: 320, y: 300, w: 340, h: 44 },
+      { x: 940, y: 300, w: 340, h: 44 },
+      { x: 320, y: 1060, w: 340, h: 44 },
+      { x: 940, y: 1060, w: 340, h: 44 },
+      { x: 300, y: 520, w: 44, h: 360 },
+      { x: 1260, y: 520, w: 44, h: 360 },
+      // Stacked dock pallets to break line of sight.
+      { x: 620, y: 560, w: 120, h: 120 },
+      { x: 880, y: 740, w: 120, h: 120 },
+      { x: 480, y: 860, w: 100, h: 100 },
+      { x: 1000, y: 460, w: 100, h: 100 },
+    ]),
+  ],
+}
+
+export const MAPS: GameMap[] = [
+  STREETS,
+  WAREHOUSE,
+  HIVE,
+  REFUGE,
+  ALLEY,
+  ROOFTOP,
+  HIGHWAY,
+  DEADEND,
+  FOGWARD,
+]
 
 export function mapById(id: MapId): GameMap {
   const m = MAPS.find((mm) => mm.id === id)

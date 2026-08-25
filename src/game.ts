@@ -1,4 +1,4 @@
-import type { Mission } from './missions'
+import type { BossKind, Mission } from './missions'
 import type { Weapon } from './weapons'
 import { weaponById } from './weapons'
 import type { Character } from './characters'
@@ -137,8 +137,17 @@ interface Barricade {
   maxHp: number
 }
 
-/** The Hive Mother: a two-phase alpha bug that ends the campaign. */
+/** Wet prints the Camo Stalker leaves while it is invisible. */
+interface Footprint {
+  x: number
+  y: number
+  life: number
+}
+
+/** A two-phase campaign boss; behaviour and art branch on `kind`. */
 interface Boss {
+  kind: BossKind
+  name: string
   x: number
   y: number
   r: number
@@ -156,6 +165,12 @@ interface Boss {
   dashDir: { x: number; y: number }
   hurt: number
   attackCooldown: number
+  /** Runner Alpha: seconds until the next pack-summoning scream. */
+  screamTimer: number
+  /** Camo Stalker: seconds left of the current visible/invisible stretch. */
+  cloakTimer: number
+  cloaked: boolean
+  footprints: Footprint[]
 }
 
 /** Venom spat by the boss; a hit counts as a sting. */
@@ -362,13 +377,41 @@ const BOSS_DASH_INTERVAL = 5
 const BOSS_DASH_TIME = 0.75
 const BOSS_DASH_SPEED = 640
 const BOSS_CONTACT_DAMAGE = 22
+/** Runner Alpha: 50% faster than a normal zombie, leaps walls, calls a pack. */
+const ALPHA_MAX_HP = 1500
+const ALPHA_RADIUS = 34
+const ALPHA_SPEED = 165
+const ALPHA_LEAP_INTERVAL = 4
+const ALPHA_LEAP_TIME = 0.5
+const ALPHA_LEAP_SPEED = 760
+const ALPHA_SCREAM_INTERVAL = 10
+const ALPHA_PACK_SIZE = 3
+const ALPHA_PACK_MAX = 10
+const ALPHA_CONTACT_DAMAGE = 16
+/** Camo Stalker: cloaks for six seconds, then backstabs out of the fog. */
+const STALKER_MAX_HP = 1600
+const STALKER_RADIUS = 44
+const STALKER_SPEED = 96
+const STALKER_CLOAK_TIME = 6
+const STALKER_VISIBLE_TIME = 6
+const STALKER_BACKSTAB_DAMAGE = 38
+const STALKER_FOOTPRINT_INTERVAL = 0.28
+const STALKER_FOOTPRINT_LIFE = 3
+/** Brood Matron: a lighter Hive Mother that guards the skyline. */
+const MATRON_MAX_HP = 1400
+const MATRON_RADIUS = 50
 const VENOM_SPEED = 210
 const VENOM_LIFE = 3
 const VENOM_DAMAGE = 6.5
 /** How close a player must get to the hive centre to trigger the reveal. */
 const BOSS_REVEAL_RANGE = 320
 const BOSS_REVEAL_TIME = 3.6
-const BOSS_REVEAL_LINE = 'There she is... the source of the infection. Eyes up, let\'s take it down!'
+const BOSS_REVEAL_LINES: Record<BossKind, string> = {
+  'hive-mother': "There she is... the source of the infection. Eyes up, let's take it down!",
+  'brood-matron': "There she is... the roof belongs to her brood. Eyes up, let's take it down!",
+  'runner-alpha': "There she is... that's the Alpha. Watch the walls and keep moving!",
+  'camo-stalker': "There it is... barely. Watch the floor for prints, it's already circling!",
+}
 
 export class Game {
   private ctx: CanvasRenderingContext2D
@@ -626,36 +669,68 @@ export class Game {
     }
 
     if (mission.type === 'boss') {
-      // She nests in the middle of the hive, where the reveal fires.
-      const spot = this.openSpot(
-        BOSS_RADIUS + 12,
-        { x: this.map.width / 2, y: this.map.height / 2 },
-        0,
-        260
-      )
-      this.boss = {
-        x: spot.x,
-        y: spot.y,
-        r: BOSS_RADIUS,
-        hp: BOSS_MAX_HP,
-        maxHp: BOSS_MAX_HP,
-        baseSpeed: BOSS_SPEED,
-        phase: 1,
-        wobble: 0,
-        angle: 0,
-        ringTimer: 2,
-        broodTimer: 3,
-        dashTimer: BOSS_DASH_INTERVAL,
-        dashing: 0,
-        dashDir: { x: 1, y: 0 },
-        hurt: 0,
-        attackCooldown: 0,
-      }
+      this.boss = this.makeBoss(mission.boss ?? 'hive-mother')
     }
 
     playMusic(mission.type === 'boss' ? 'boss' : 'battle')
     this.setState('playing')
     this.start()
+  }
+
+  /** Every boss nests in the middle of its arena, where the reveal fires. */
+  private makeBoss(kind: BossKind): Boss {
+    const stats: Record<BossKind, { name: string; r: number; hp: number; speed: number }> = {
+      'hive-mother': { name: BOSS_NAME, r: BOSS_RADIUS, hp: BOSS_MAX_HP, speed: BOSS_SPEED },
+      'brood-matron': {
+        name: 'The Brood Matron',
+        r: MATRON_RADIUS,
+        hp: MATRON_MAX_HP,
+        speed: BOSS_SPEED * 1.15,
+      },
+      'runner-alpha': {
+        name: 'The Runner Alpha',
+        r: ALPHA_RADIUS,
+        hp: ALPHA_MAX_HP,
+        speed: ALPHA_SPEED,
+      },
+      'camo-stalker': {
+        name: 'The Camo Stalker',
+        r: STALKER_RADIUS,
+        hp: STALKER_MAX_HP,
+        speed: STALKER_SPEED,
+      },
+    }
+    const s = stats[kind]
+    const spot = this.openSpot(
+      s.r + 12,
+      { x: this.map.width / 2, y: this.map.height / 2 },
+      0,
+      260
+    )
+    return {
+      kind,
+      name: s.name,
+      x: spot.x,
+      y: spot.y,
+      r: s.r,
+      hp: s.hp,
+      maxHp: s.hp,
+      baseSpeed: s.speed,
+      phase: 1,
+      wobble: 0,
+      angle: 0,
+      ringTimer: 2,
+      broodTimer: 3,
+      dashTimer: kind === 'runner-alpha' ? ALPHA_LEAP_INTERVAL : BOSS_DASH_INTERVAL,
+      dashing: 0,
+      dashDir: { x: 1, y: 0 },
+      hurt: 0,
+      attackCooldown: 0,
+      screamTimer: ALPHA_SCREAM_INTERVAL,
+      cloakTimer: STALKER_VISIBLE_TIME,
+      cloaked: false,
+      footprints: [],
+    }
   }
 
   /** Finds a wall-free point, optionally within a distance band of an anchor. */
@@ -746,7 +821,7 @@ export class Game {
           : null,
       boss: this.boss
         ? {
-            name: BOSS_NAME,
+            name: this.boss.name,
             hp: Math.max(0, Math.round(this.boss.hp)),
             maxHp: this.boss.maxHp,
             phase: this.boss.phase,
@@ -1330,6 +1405,15 @@ export class Game {
     const prey = this.nearestPlayerTo(b)
     if (prey) b.angle = Math.atan2(prey.y - b.y, prey.x - b.x)
 
+    if (b.kind === 'runner-alpha') {
+      this.updateRunnerAlpha(b, dt, prey)
+      return
+    }
+    if (b.kind === 'camo-stalker') {
+      this.updateCamoStalker(b, dt, prey)
+      return
+    }
+
     if (b.dashing > 0) {
       b.dashing -= dt
       this.moveCircle(b, b.dashDir.x * BOSS_DASH_SPEED * dt, b.dashDir.y * BOSS_DASH_SPEED * dt)
@@ -1372,6 +1456,115 @@ export class Game {
         prey.safeTimer = 0
         b.attackCooldown = 1
       }
+    }
+  }
+
+  /**
+   * The Runner Alpha sprints at the nearest player, leaps clean over debris
+   * and screams every ten seconds to pull in a pack of Runner minions.
+   */
+  private updateRunnerAlpha(b: Boss, dt: number, prey: Player | null) {
+    const enraged = b.phase === 2
+    if (b.dashing > 0) {
+      // A leap ignores walls: she vaults the rubble instead of pathing round.
+      b.dashing -= dt
+      const nx = clamp(b.x + b.dashDir.x * ALPHA_LEAP_SPEED * dt, b.r, this.map.width - b.r)
+      const ny = clamp(b.y + b.dashDir.y * ALPHA_LEAP_SPEED * dt, b.r, this.map.height - b.r)
+      b.x = nx
+      b.y = ny
+      if (b.dashing <= 0 && circleHitsWall(this.map, b.x, b.y, b.r)) {
+        const landing = this.openSpot(b.r, b, 0, 160)
+        b.x = landing.x
+        b.y = landing.y
+      }
+    } else if (prey) {
+      const speed = b.baseSpeed * (enraged ? BOSS_ENRAGE_SPEED : 1)
+      this.moveCircle(b, Math.cos(b.angle) * speed * dt, Math.sin(b.angle) * speed * dt)
+      b.dashTimer -= dt
+      if (b.dashTimer <= 0) {
+        b.dashTimer = ALPHA_LEAP_INTERVAL * (enraged ? 0.7 : 1)
+        b.dashing = ALPHA_LEAP_TIME
+        b.dashDir = { x: Math.cos(b.angle), y: Math.sin(b.angle) }
+        playSfx('boss-dash')
+      }
+    }
+
+    b.screamTimer -= dt
+    if (b.screamTimer <= 0) {
+      b.screamTimer = ALPHA_SCREAM_INTERVAL
+      playSfx('boss-roar')
+      for (let i = 0; i < ALPHA_PACK_SIZE; i++) {
+        if (this.enemies.length >= ALPHA_PACK_MAX) break
+        this.enemies.push(this.makeRunner(this.openSpot(12, b, 120, 300)))
+      }
+    }
+
+    if (prey && b.attackCooldown === 0 && Math.hypot(prey.x - b.x, prey.y - b.y) < b.r + prey.r) {
+      prey.hp -= ALPHA_CONTACT_DAMAGE
+      prey.hurtCooldown = 0.3
+      prey.safeTimer = 0
+      b.attackCooldown = 0.8
+    }
+  }
+
+  /**
+   * The Camo Stalker alternates six seconds visible with six invisible. While
+   * cloaked she only shows as wet footprints, then reappears behind her prey
+   * for a backstab.
+   */
+  private updateCamoStalker(b: Boss, dt: number, prey: Player | null) {
+    for (let i = b.footprints.length - 1; i >= 0; i--) {
+      b.footprints[i].life -= dt
+      if (b.footprints[i].life <= 0) b.footprints.splice(i, 1)
+    }
+
+    b.cloakTimer -= dt
+    if (b.cloakTimer <= 0) {
+      b.cloaked = !b.cloaked
+      b.cloakTimer = b.cloaked ? STALKER_CLOAK_TIME : STALKER_VISIBLE_TIME
+      if (!b.cloaked && prey) {
+        // Slips in behind whoever she was hunting and strikes.
+        const behind = prey.angle + Math.PI
+        const spot = {
+          x: clamp(prey.x + Math.cos(behind) * (prey.r + b.r + 6), b.r, this.map.width - b.r),
+          y: clamp(prey.y + Math.sin(behind) * (prey.r + b.r + 6), b.r, this.map.height - b.r),
+        }
+        if (!circleHitsWall(this.map, spot.x, spot.y, b.r)) {
+          b.x = spot.x
+          b.y = spot.y
+        }
+        prey.hp -= STALKER_BACKSTAB_DAMAGE
+        prey.hurtCooldown = 0.4
+        prey.safeTimer = 0
+        playSfx('boss-dash')
+      } else {
+        playSfx('cloak')
+      }
+    }
+
+    if (prey) {
+      const speed = b.baseSpeed * (b.cloaked ? 1.45 : 1) * (b.phase === 2 ? BOSS_ENRAGE_SPEED : 1)
+      this.moveCircle(b, Math.cos(b.angle) * speed * dt, Math.sin(b.angle) * speed * dt)
+    }
+
+    if (b.cloaked) {
+      b.ringTimer -= dt
+      if (b.ringTimer <= 0) {
+        b.ringTimer = STALKER_FOOTPRINT_INTERVAL
+        b.footprints.push({ x: b.x, y: b.y, life: STALKER_FOOTPRINT_LIFE })
+      }
+    }
+
+    if (
+      prey &&
+      !b.cloaked &&
+      b.attackCooldown === 0 &&
+      Math.hypot(prey.x - b.x, prey.y - b.y) < b.r + prey.r
+    ) {
+      prey.hp -= BOSS_CONTACT_DAMAGE
+      prey.hurtCooldown = 0.3
+      prey.safeTimer = 0
+      b.attackCooldown = 1
     }
   }
 
@@ -2170,6 +2363,14 @@ export class Game {
 
   /** The Hive Mother: layered blocky body with wings floating over her shadow. */
   private drawBoss(b: Boss) {
+    if (b.kind === 'runner-alpha') {
+      this.drawRunnerAlpha(b)
+      return
+    }
+    if (b.kind === 'camo-stalker') {
+      this.drawCamoStalker(b)
+      return
+    }
     const ctx = this.ctx
     const enhanced = this.textures === 'enhanced'
     const lift = enhanced ? UNIT_LIFT * 3 : 0
@@ -2263,6 +2464,157 @@ export class Game {
       ctx.stroke()
       ctx.restore()
     }
+  }
+
+  /** Runner Alpha: an oversized, glowing Runner mid-sprint. */
+  private drawRunnerAlpha(b: Boss) {
+    const ctx = this.ctx
+    const lift = this.textures === 'enhanced' ? UNIT_LIFT * 2.4 : 0
+    const leaping = b.dashing > 0
+    const stride = Math.sin(b.wobble * 12)
+
+    ctx.save()
+    ctx.fillStyle = 'rgba(0,0,0,0.45)'
+    ctx.beginPath()
+    ctx.ellipse(b.x, b.y + b.r * 0.4, b.r * (leaping ? 0.7 : 1), b.r * 0.42, 0, 0, Math.PI * 2)
+    ctx.fill()
+    ctx.restore()
+
+    ctx.save()
+    ctx.translate(b.x, b.y - lift - (leaping ? b.r * 0.5 : 0))
+    ctx.rotate(b.angle)
+
+    // Heat glow: brighter mid-leap and in phase 2.
+    const glow = ctx.createRadialGradient(0, 0, b.r * 0.3, 0, 0, b.r * 1.9)
+    glow.addColorStop(0, b.phase === 2 ? 'rgba(255,90,60,0.55)' : 'rgba(255,60,60,0.4)')
+    glow.addColorStop(1, 'rgba(255,60,60,0)')
+    ctx.fillStyle = glow
+    ctx.beginPath()
+    ctx.arc(0, 0, b.r * 1.9, 0, Math.PI * 2)
+    ctx.fill()
+
+    // Sprinting legs.
+    ctx.strokeStyle = '#7f1d1d'
+    ctx.lineWidth = 7
+    for (const side of [-1, 1]) {
+      ctx.beginPath()
+      ctx.moveTo(-b.r * 0.2, side * b.r * 0.4)
+      ctx.lineTo(-b.r * 0.9, side * b.r * 0.8 + stride * side * b.r * 0.4)
+      ctx.stroke()
+    }
+
+    ctx.beginPath()
+    ctx.arc(0, 0, b.r, 0, Math.PI * 2)
+    ctx.fillStyle = b.phase === 2 ? '#f43f5e' : '#dc2626'
+    ctx.fill()
+    ctx.strokeStyle = '#450a0a'
+    ctx.lineWidth = 5
+    ctx.stroke()
+
+    // Clawed arms reaching forward.
+    ctx.strokeStyle = '#fca5a5'
+    ctx.lineWidth = 6
+    for (const side of [-1, 1]) {
+      ctx.beginPath()
+      ctx.moveTo(b.r * 0.2, side * b.r * 0.5)
+      ctx.lineTo(b.r * 1.25, side * b.r * (0.55 - stride * 0.2))
+      ctx.stroke()
+    }
+
+    ctx.fillStyle = '#fde68a'
+    for (const side of [-1, 1]) {
+      ctx.beginPath()
+      ctx.arc(b.r * 0.55, side * b.r * 0.28, b.r * 0.14, 0, Math.PI * 2)
+      ctx.fill()
+    }
+
+    if (b.hurt > 0) {
+      ctx.fillStyle = 'rgba(255,255,255,0.45)'
+      ctx.beginPath()
+      ctx.arc(0, 0, b.r, 0, Math.PI * 2)
+      ctx.fill()
+    }
+    ctx.restore()
+
+    if (leaping) {
+      ctx.save()
+      ctx.strokeStyle = 'rgba(255,120,80,0.75)'
+      ctx.lineWidth = 4
+      ctx.beginPath()
+      ctx.arc(b.x, b.y - lift, b.r + 16, 0, Math.PI * 2)
+      ctx.stroke()
+      ctx.restore()
+    }
+  }
+
+  /** Camo Stalker: near-invisible while cloaked, tracked by wet prints. */
+  private drawCamoStalker(b: Boss) {
+    const ctx = this.ctx
+    const lift = this.textures === 'enhanced' ? UNIT_LIFT * 2.4 : 0
+
+    for (const f of b.footprints) {
+      ctx.save()
+      ctx.globalAlpha = Math.max(0, f.life / STALKER_FOOTPRINT_LIFE) * 0.6
+      ctx.fillStyle = '#7dd3fc'
+      ctx.beginPath()
+      ctx.ellipse(f.x, f.y, 9, 5, 0, 0, Math.PI * 2)
+      ctx.fill()
+      ctx.restore()
+    }
+
+    const alpha = b.cloaked ? 0.12 : 1
+    ctx.save()
+    ctx.globalAlpha = alpha
+    ctx.fillStyle = 'rgba(0,0,0,0.4)'
+    ctx.beginPath()
+    ctx.ellipse(b.x, b.y + b.r * 0.4, b.r, b.r * 0.45, 0, 0, Math.PI * 2)
+    ctx.fill()
+
+    ctx.translate(b.x, b.y - lift)
+    ctx.rotate(b.angle)
+
+    // Chameleon body: takes the floor colour while blending away.
+    ctx.beginPath()
+    ctx.ellipse(0, 0, b.r, b.r * 0.78, 0, 0, Math.PI * 2)
+    ctx.fillStyle = b.cloaked ? this.map.color : '#3f6212'
+    ctx.fill()
+    ctx.strokeStyle = b.cloaked ? 'rgba(148,163,184,0.6)' : '#1a2e05'
+    ctx.lineWidth = 4
+    ctx.stroke()
+
+    // Ridged spine plates.
+    ctx.fillStyle = b.cloaked ? 'rgba(148,163,184,0.35)' : '#65a30d'
+    for (let i = -2; i <= 2; i++) {
+      ctx.beginPath()
+      ctx.moveTo(i * b.r * 0.32, -b.r * 0.5)
+      ctx.lineTo(i * b.r * 0.32 + b.r * 0.14, -b.r * 0.85)
+      ctx.lineTo(i * b.r * 0.32 + b.r * 0.28, -b.r * 0.5)
+      ctx.closePath()
+      ctx.fill()
+    }
+
+    // Curled tail and a long striking tongue-arm.
+    ctx.strokeStyle = b.cloaked ? 'rgba(148,163,184,0.5)' : '#4d7c0f'
+    ctx.lineWidth = 8
+    ctx.beginPath()
+    ctx.arc(-b.r * 1.1, 0, b.r * 0.4, Math.PI * 0.2, Math.PI * 1.6)
+    ctx.stroke()
+
+    ctx.fillStyle = '#fde047'
+    for (const side of [-1, 1]) {
+      ctx.beginPath()
+      ctx.arc(b.r * 0.6, side * b.r * 0.3, b.r * 0.16, 0, Math.PI * 2)
+      ctx.fill()
+    }
+
+    if (b.hurt > 0) {
+      ctx.globalAlpha = 1
+      ctx.fillStyle = 'rgba(255,255,255,0.5)'
+      ctx.beginPath()
+      ctx.ellipse(0, 0, b.r, b.r * 0.78, 0, 0, Math.PI * 2)
+      ctx.fill()
+    }
+    ctx.restore()
   }
 
   private drawExtraction() {
@@ -2702,7 +3054,7 @@ export class Game {
     const speaker = this.alivePlayers[0] ?? this.players[0]
     if (!speaker) return
     const ctx = this.ctx
-    const text = BOSS_REVEAL_LINE
+    const text = BOSS_REVEAL_LINES[this.boss?.kind ?? 'hive-mother']
     ctx.save()
     ctx.font = 'bold 15px system-ui, sans-serif'
     ctx.textAlign = 'center'
@@ -2895,8 +3247,9 @@ export class Game {
       ctx.fill()
     }
 
-    if (this.boss) {
-      ctx.fillStyle = '#f0871b'
+    // A cloaked Stalker drops off the radar too.
+    if (this.boss && !this.boss.cloaked) {
+      ctx.fillStyle = this.boss.kind === 'runner-alpha' ? '#f43f5e' : '#f0871b'
       ctx.beginPath()
       ctx.arc(mx + this.boss.x * s, my + this.boss.y * s, 6, 0, Math.PI * 2)
       ctx.fill()
