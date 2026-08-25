@@ -51,6 +51,8 @@ interface Player {
   /** Remaining uses of a charge-limited ability; -1 when unlimited. */
   abilityCharges: number
   barricadeCharges: number
+  /** 1 right after a shot, decaying to 0 — drives the hand kickback. */
+  recoil: number
 }
 
 export type EnemyKind = 'zombie' | 'bug' | 'runner' | 'camo'
@@ -299,6 +301,16 @@ const MUTATION_ARMOUR = 0.7
 const ACID_LIFE = 7
 const ACID_RADIUS = 34
 const ACID_DPS = 16
+/** How fast a mutation skin fades in and back out again, in units per second. */
+const MUTATION_SKIN_FADE = 2.5
+/** How fast the hand kickback settles after a shot. */
+const RECOIL_RECOVERY = 7
+
+const MUTATION_SKINS: Record<MutationId, { body: string; trim: string }> = {
+  'hyper-speed': { body: '#a855f7', trim: '#e9d5ff' },
+  hardened: { body: '#64748b', trim: '#1e293b' },
+  'toxic-blood': { body: '#22c55e', trim: '#bbf7d0' },
+}
 
 const MUTATIONS: Omit<Mutation, 'time'>[] = [
   { id: 'hyper-speed', name: 'Hyper-Speed Mutation', blurb: 'All infected move 25% faster.' },
@@ -385,6 +397,10 @@ export class Game {
   private mutationTimer = MUTATION_INTERVAL
   /** Seconds left on the "Virus Mutating!" HUD alert. */
   private mutationAlert = 0
+  /** Mutation whose skin is on screen; outlives the effect while fading out. */
+  private mutationSkin: MutationId | null = null
+  /** 0..1 blend of the mutation skin over the default enemy look. */
+  private mutationFade = 0
 
   private spawnTimer = 0
   private spawned = 0
@@ -449,6 +465,7 @@ export class Game {
       abilityActive: 0,
       abilityCharges: character.ability.charges > 0 ? character.ability.charges : -1,
       barricadeCharges: character.barricades,
+      recoil: 0,
     }
   }
 
@@ -540,6 +557,8 @@ export class Game {
     this.mutation = null
     this.mutationTimer = MUTATION_INTERVAL
     this.mutationAlert = 0
+    this.mutationSkin = null
+    this.mutationFade = 0
     this.zoom = 1
     this.runAndGunChecked = false
 
@@ -746,6 +765,15 @@ export class Game {
     if (this.mutation) {
       this.mutation.time -= dt
       if (this.mutation.time <= 0) this.mutation = null
+    }
+    // Skins blend in when a mutation lands and blend back out when it expires.
+    const step = dt * MUTATION_SKIN_FADE
+    if (this.mutation) {
+      this.mutationSkin = this.mutation.id
+      this.mutationFade = Math.min(1, this.mutationFade + step)
+    } else {
+      this.mutationFade = Math.max(0, this.mutationFade - step)
+      if (this.mutationFade === 0) this.mutationSkin = null
     }
     this.mutationTimer -= dt
     if (this.mutationTimer > 0) return
@@ -958,6 +986,7 @@ export class Game {
       p.shooting = keysPressed.shooting
     }
     p.hurtCooldown = Math.max(0, p.hurtCooldown - dt)
+    p.recoil = Math.max(0, p.recoil - dt * RECOIL_RECOVERY)
 
     const c = p.character
     if (c.regenFraction > 0) {
@@ -1107,6 +1136,7 @@ export class Game {
       })
     }
     p.mag -= 1
+    p.recoil = 1
     playShot(w)
   }
 
@@ -2270,12 +2300,153 @@ export class Game {
     ctx.stroke()
   }
 
+  /** Body colour for an enemy, swapped out while a mutation skin is on. */
+  private enemySkinColor(base: string): string {
+    const skin = this.mutationSkin
+    return skin && this.mutationFade > 0.5 ? MUTATION_SKINS[skin].body : base
+  }
+
+  /** Direction an enemy is lunging in: its prey, or its idle drift. */
+  private enemyFacing(z: Enemy): number {
+    const prey = this.nearestPlayerTo(z)
+    if (!prey) return z.driftAngle
+    return Math.atan2(prey.y - z.y, prey.x - z.x)
+  }
+
+  /**
+   * Two fists clawing toward the prey, alternating so the enemy looks like it
+   * is frantically grabbing as it closes in.
+   */
+  private drawReachingHands(z: Enemy, y: number, skin: string, outline: string) {
+    const ctx = this.ctx
+    const angle = this.enemyFacing(z)
+    const hr = Math.max(3.5, z.r * 0.3)
+    ctx.save()
+    ctx.translate(z.x, y)
+    ctx.rotate(angle)
+    for (const side of [-1, 1]) {
+      const cycle = Math.sin(z.wobble * 7 + (side > 0 ? Math.PI : 0))
+      const reach = z.r + Math.max(7, z.r * 0.3) + z.r * 0.35 * cycle
+      const lift = side * (Math.max(7, z.r * 0.55) - z.r * 0.12 * cycle)
+      ctx.beginPath()
+      ctx.moveTo(z.r * 0.35, side * z.r * 0.45)
+      ctx.lineTo(reach, lift)
+      ctx.strokeStyle = outline
+      ctx.lineWidth = Math.max(2, z.r * 0.18)
+      ctx.lineCap = 'round'
+      ctx.stroke()
+      ctx.beginPath()
+      ctx.arc(reach, lift, hr, 0, Math.PI * 2)
+      ctx.fillStyle = skin
+      ctx.fill()
+      ctx.strokeStyle = outline
+      ctx.lineWidth = 1.5
+      ctx.stroke()
+    }
+    ctx.restore()
+  }
+
+  /**
+   * Paints the active mutation's texture over an enemy body, fading in when the
+   * virus mutates and back out when the modifier expires.
+   */
+  private drawMutationSkin(z: Enemy, y: number, r: number) {
+    const skin = this.mutationSkin
+    if (!skin || this.mutationFade <= 0.01) return
+    const ctx = this.ctx
+    const { body, trim } = MUTATION_SKINS[skin]
+    const fade = this.mutationFade
+    ctx.save()
+    ctx.translate(z.x, y)
+    ctx.globalAlpha = 0.92 * fade
+
+    if (skin === 'hardened') {
+      // Rocky plating with a spiked rim.
+      ctx.beginPath()
+      for (let i = 0; i < 12; i++) {
+        const a = (i / 12) * Math.PI * 2
+        const spike = i % 2 === 0 ? r * 1.28 : r * 0.94
+        const px = Math.cos(a) * spike
+        const py = Math.sin(a) * spike
+        if (i === 0) ctx.moveTo(px, py)
+        else ctx.lineTo(px, py)
+      }
+      ctx.closePath()
+      ctx.fillStyle = body
+      ctx.fill()
+      ctx.strokeStyle = trim
+      ctx.lineWidth = 2
+      ctx.stroke()
+      ctx.fillStyle = 'rgba(148,163,184,0.55)'
+      for (let i = 0; i < 4; i++) {
+        const a = (i / 4) * Math.PI * 2 + 0.6
+        ctx.beginPath()
+        ctx.arc(Math.cos(a) * r * 0.45, Math.sin(a) * r * 0.45, r * 0.22, 0, Math.PI * 2)
+        ctx.fill()
+      }
+      ctx.restore()
+      return
+    }
+
+    ctx.beginPath()
+    ctx.arc(0, 0, r, 0, Math.PI * 2)
+    ctx.fillStyle = body
+    ctx.fill()
+    ctx.strokeStyle = trim
+    ctx.lineWidth = 2
+    ctx.stroke()
+
+    if (skin === 'hyper-speed') {
+      // Electric sparks trailing behind the direction of travel.
+      const back = this.enemyFacing(z) + Math.PI
+      ctx.globalAlpha = 0.8 * fade
+      ctx.strokeStyle = trim
+      ctx.lineWidth = 2
+      for (let i = 0; i < 3; i++) {
+        const a = back + (i - 1) * 0.4
+        const jitter = Math.sin(z.wobble * 18 + i * 2) * 4
+        ctx.beginPath()
+        ctx.moveTo(Math.cos(a) * r, Math.sin(a) * r)
+        ctx.lineTo(Math.cos(a) * (r + 12 + jitter), Math.sin(a) * (r + 12 + jitter))
+        ctx.stroke()
+      }
+      ctx.fillStyle = '#f5d0fe'
+      for (let i = 0; i < 3; i++) {
+        const a = back + Math.sin(z.wobble * 9 + i * 2.1) * 0.9
+        const d = r + 6 + ((z.wobble * 40 + i * 9) % 14)
+        ctx.beginPath()
+        ctx.arc(Math.cos(a) * d, Math.sin(a) * d, 2, 0, Math.PI * 2)
+        ctx.fill()
+      }
+    } else {
+      // Bubbling radioactive hide with droplets running off the body.
+      ctx.globalAlpha = 0.85 * fade
+      ctx.fillStyle = trim
+      for (let i = 0; i < 4; i++) {
+        const a = (i / 4) * Math.PI * 2 + z.wobble * 1.5
+        const rad = r * 0.22 * (0.7 + 0.4 * Math.sin(z.wobble * 6 + i))
+        ctx.beginPath()
+        ctx.arc(Math.cos(a) * r * 0.45, Math.sin(a) * r * 0.45, rad, 0, Math.PI * 2)
+        ctx.fill()
+      }
+      ctx.fillStyle = '#84cc16'
+      for (let i = 0; i < 3; i++) {
+        const drip = (z.wobble * 30 + i * 7) % 16
+        ctx.beginPath()
+        ctx.ellipse((i - 1) * r * 0.5, r * 0.6 + drip, 2.5, 4, 0, 0, Math.PI * 2)
+        ctx.fill()
+      }
+    }
+    ctx.restore()
+  }
+
   private drawZombie(z: Enemy) {
     const ctx = this.ctx
     this.drawStatusRing(z)
     const enhanced = this.textures === 'enhanced'
     const y = enhanced ? z.y - UNIT_LIFT : z.y
     const flat = z.r > 16 ? '#8b1414' : '#d62828'
+    this.drawReachingHands(z, y, this.enemySkinColor(flat), '#4a0a0a')
     ctx.beginPath()
     ctx.arc(z.x, y, z.r, 0, Math.PI * 2)
     if (enhanced) {
@@ -2291,6 +2462,7 @@ export class Game {
     ctx.strokeStyle = '#4a0a0a'
     ctx.lineWidth = 2
     ctx.stroke()
+    this.drawMutationSkin(z, y, z.r)
   }
 
   /** Toxic Blood residue: a bubbling green puddle that fades out. */
@@ -2331,6 +2503,8 @@ export class Game {
       ctx.arc(z.x - Math.cos(z.driftAngle) * 0, y, z.r + i * 4, 0, Math.PI * 2)
       ctx.stroke()
     }
+    ctx.restore()
+    this.drawReachingHands(z, y, this.enemySkinColor('#ff1e1e'), '#7f1d1d')
     ctx.beginPath()
     ctx.arc(z.x, y, z.r, 0, Math.PI * 2)
     ctx.fillStyle = '#ff1e1e'
@@ -2338,7 +2512,7 @@ export class Game {
     ctx.strokeStyle = '#7f1d1d'
     ctx.lineWidth = 2
     ctx.stroke()
-    ctx.restore()
+    this.drawMutationSkin(z, y, z.r)
   }
 
   /**
@@ -2350,6 +2524,7 @@ export class Game {
     const y = this.textures === 'enhanced' ? z.y - UNIT_LIFT : z.y
     if (z.revealed) {
       this.drawStatusRing(z)
+      this.drawReachingHands(z, y, this.enemySkinColor('#3f6212'), '#1a2e05')
       ctx.beginPath()
       ctx.arc(z.x, y, z.r, 0, Math.PI * 2)
       ctx.fillStyle = '#3f6212'
@@ -2357,6 +2532,7 @@ export class Game {
       ctx.strokeStyle = '#d62828'
       ctx.lineWidth = 3
       ctx.stroke()
+      this.drawMutationSkin(z, y, z.r)
       return
     }
 
@@ -2397,9 +2573,11 @@ export class Game {
     const ctx = this.ctx
     this.drawStatusRing(b)
     const flap = Math.sin(b.wobble * 22) * 0.6
+    const bodyY = this.textures === 'enhanced' ? b.y - UNIT_LIFT * 2 : b.y
+    this.drawReachingHands(b, bodyY, this.enemySkinColor('#ffa41b'), '#8a4b00')
     ctx.save()
     // In the 3D pack the bug floats a little above its ground shadow.
-    ctx.translate(b.x, this.textures === 'enhanced' ? b.y - UNIT_LIFT * 2 : b.y)
+    ctx.translate(b.x, bodyY)
     ctx.fillStyle = 'rgba(255, 213, 128, 0.45)'
     for (const side of [-1, 1]) {
       ctx.save()
@@ -2417,6 +2595,7 @@ export class Game {
     ctx.lineWidth = 2
     ctx.stroke()
     ctx.restore()
+    this.drawMutationSkin(b, bodyY, b.r)
   }
 
   private drawMapLabel() {
@@ -2456,13 +2635,15 @@ export class Game {
       ctx.stroke()
     }
 
+    const kick = p.recoil * 5
     ctx.save()
     ctx.rotate(p.angle)
     ctx.fillStyle = '#e5e7eb'
-    ctx.fillRect(p.r - 4, -4, 22, 8)
+    ctx.fillRect(p.r - 4 - kick, -4, 22, 8)
     ctx.restore()
 
     drawCharacterSkin(ctx, p.character.id, p.r, p.angle, p.hurtCooldown > 0)
+    this.drawPlayerHands(p, kick)
 
     if (this.players.length > 1) {
       ctx.fillStyle = p.id === 1 ? '#34d399' : '#60a5fa'
@@ -2470,6 +2651,38 @@ export class Game {
       ctx.textAlign = 'center'
       ctx.fillText(p.down ? `P${p.id} DOWN` : `P${p.id}`, 0, -p.r - 8)
       ctx.textAlign = 'left'
+    }
+    ctx.restore()
+  }
+
+  /**
+   * Both fists gripping the weapon along the aim line, snapping backwards for
+   * a moment after each shot. Drawn inside the player's translated frame.
+   */
+  private drawPlayerHands(p: Player, kick: number) {
+    const ctx = this.ctx
+    const grips: { fwd: number; side: number }[] = [
+      { fwd: p.r + 12, side: -3 },
+      { fwd: p.r + 1, side: 4 },
+    ]
+    ctx.save()
+    ctx.rotate(p.angle)
+    for (const g of grips) {
+      const hx = g.fwd - kick
+      ctx.beginPath()
+      ctx.moveTo(p.r * 0.4, g.side * 1.6)
+      ctx.lineTo(hx, g.side)
+      ctx.strokeStyle = 'rgba(15,23,42,0.7)'
+      ctx.lineWidth = 3
+      ctx.lineCap = 'round'
+      ctx.stroke()
+      ctx.beginPath()
+      ctx.arc(hx, g.side, 4.5, 0, Math.PI * 2)
+      ctx.fillStyle = '#e8b98a'
+      ctx.fill()
+      ctx.strokeStyle = '#7c4a21'
+      ctx.lineWidth = 1.5
+      ctx.stroke()
     }
     ctx.restore()
   }
