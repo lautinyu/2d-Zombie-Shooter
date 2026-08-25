@@ -1,5 +1,16 @@
 export type CharacterId = 'nature-lover' | 'army-retiree' | 'medic' | 'engineer'
 
+export interface Ability {
+  name: string
+  description: string
+  /** Seconds before the ability can be used again. */
+  cooldown: number
+  /** Seconds the effect stays active; 0 for instant abilities. */
+  duration: number
+  /** Uses per mission; 0 means unlimited (cooldown gated only). */
+  charges: number
+}
+
 export interface Character {
   id: CharacterId
   name: string
@@ -19,8 +30,10 @@ export interface Character {
   regenFraction: number
   /** Seconds without taking damage before a regen tick lands. */
   regenInterval: number
-  /** Deploys an automated turret at the start of the mission. */
-  turret: boolean
+  /** Active ability fired with E (player 1) or M (player 2). */
+  ability: Ability
+  /** Barricades deployable per mission with Q (player 1) or , (player 2). */
+  barricades: number
 }
 
 export const CHARACTERS: Character[] = [
@@ -38,7 +51,15 @@ export const CHARACTERS: Character[] = [
     extraLives: 0,
     regenFraction: 0,
     regenInterval: 0,
-    turret: false,
+    ability: {
+      name: 'Camouflage Blend',
+      description:
+        'Bursts a cloud of leaves — for 6 seconds every zombie and Plague Bug loses track of you.',
+      cooldown: 25,
+      duration: 6,
+      charges: 0,
+    },
+    barricades: 0,
   },
   {
     id: 'army-retiree',
@@ -54,7 +75,14 @@ export const CHARACTERS: Character[] = [
     extraLives: 0,
     regenFraction: 0,
     regenInterval: 0,
-    turret: false,
+    ability: {
+      name: 'Overdrive',
+      description: '5 seconds of 20% extra speed and 1.5x bullet damage.',
+      cooldown: 20,
+      duration: 5,
+      charges: 0,
+    },
+    barricades: 0,
   },
   {
     id: 'medic',
@@ -62,31 +90,46 @@ export const CHARACTERS: Character[] = [
     color: '#38bdf8',
     tagline: 'Patched up half a city before it fell. Still carrying the kit.',
     perkName: 'Field Triage',
-    perkDescription:
-      'Starts with one extra life, and regenerates 5% health every 10 seconds spent unharmed.',
+    perkDescription: 'Regenerates 5% health every 10 seconds spent unharmed.',
     aggroMultiplier: 1,
     reloadMultiplier: 1,
     speedMultiplier: 1,
-    extraLives: 1,
+    extraLives: 0,
     regenFraction: 0.05,
     regenInterval: 10,
-    turret: false,
+    ability: {
+      name: 'Field Medkit',
+      description:
+        'Drops a medkit — walking over it heals 50% of missing health. Two kits per mission.',
+      cooldown: 6,
+      duration: 0,
+      charges: 2,
+    },
+    barricades: 0,
   },
   {
     id: 'engineer',
     name: 'The Engineer',
     color: '#a78bfa',
     tagline: 'Never fights alone — the workshop follows her everywhere.',
-    perkName: 'Auto Turret',
+    perkName: 'Defense Deployment',
     perkDescription:
-      'Deploys a stationary turret at mission start that auto-fires weak bullets at the nearest enemy.',
+      'Hand-places auto-turrets and a barricade instead of relying on a random turret drop.',
     aggroMultiplier: 1,
     reloadMultiplier: 1,
     speedMultiplier: 1,
     extraLives: 0,
     regenFraction: 0,
     regenInterval: 0,
-    turret: true,
+    ability: {
+      name: 'Defense Deployment',
+      description:
+        'Drops an auto-turret on the spot — one active at a time, twice per mission. Q (P2: ,) drops one barricade.',
+      cooldown: 4,
+      duration: 0,
+      charges: 2,
+    },
+    barricades: 1,
   },
 ]
 

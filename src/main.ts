@@ -79,10 +79,11 @@ app.innerHTML = `
       <div id="campaign" class="mt-6 space-y-4"></div>
       <div class="mt-8 rounded-lg bg-white/5 p-4 text-xs text-slate-400 ring-1 ring-white/10">
         <span class="font-semibold text-slate-200">Controls:</span>
-        WASD or Arrow keys to move · aim with the mouse · left click to shoot · R to reload.
+        WASD or Arrow keys to move · aim with the mouse · left click to shoot (keep running while you fire) · R to reload ·
+        <span class="font-mono text-slate-200">E</span> for your character's active ability (Engineer also drops a barricade with <span class="font-mono text-slate-200">Q</span>).
         Each mission loads its own isolated map. Yellow crates restock ammo.
         <span class="font-semibold text-orange-300">Orange Plague Bugs</span> are fast and sting — five stings and you turn.
-        <div class="mt-2"><span class="font-semibold text-slate-200">Co-op:</span> Player 2 moves with the Arrow keys, auto-aims at the nearest enemy and fires on its own or with the <span class="font-mono text-slate-200">.</span> key.</div>
+        <div class="mt-2"><span class="font-semibold text-slate-200">Co-op:</span> Player 2 moves with the Arrow keys, auto-aims at the nearest enemy and fires on its own or with the <span class="font-mono text-slate-200">.</span> key. Their ability is <span class="font-mono text-slate-200">M</span> (barricade <span class="font-mono text-slate-200">,</span>).</div>
       </div>
     </div>
   </div>
@@ -349,6 +350,10 @@ function renderCharacters() {
       <div class="mt-4 rounded-lg bg-black/40 p-3">
         <div class="text-sm font-bold text-sky-300">Passive: ${c.perkName}</div>
         <p class="mt-1 text-xs text-slate-400">${c.perkDescription}</p>
+      </div>
+      <div class="mt-2 rounded-lg bg-black/40 p-3">
+        <div class="text-sm font-bold text-violet-300">Active [E / M]: ${c.ability.name}</div>
+        <p class="mt-1 text-xs text-slate-400">${c.ability.description}</p>
       </div>
     `
     card.addEventListener('click', () => {
@@ -638,6 +643,15 @@ function playerPanel(): HTMLElement {
       <span>Infection</span><span data-role="stings"></span>
     </div>
     <div data-role="pips" class="mt-1 flex gap-1.5"></div>
+    <div data-role="ability" class="mt-2 rounded-md bg-white/5 px-2 py-1.5">
+      <div class="flex items-center justify-between text-[11px] font-semibold uppercase tracking-wider">
+        <span data-role="ability-name" class="text-violet-300"></span>
+        <span data-role="ability-state" class="font-mono text-slate-300"></span>
+      </div>
+      <div class="mt-1 h-1.5 w-full overflow-hidden rounded-full bg-white/10">
+        <div data-role="ability-bar" class="h-full w-full rounded-full bg-violet-400"></div>
+      </div>
+    </div>
   `
   return panel
 }
@@ -683,6 +697,27 @@ function updatePlayerPanels(h: Hud) {
     Array.from(pips.children).forEach((pip, idx) => {
       pip.className = `h-2 flex-1 rounded-full ${idx < p.stings ? 'bg-orange-400' : 'bg-white/10'}`
     })
+    const ab = p.ability
+    const ready = ab.cooldown <= 0 && ab.charges !== 0
+    pick(panel, 'ability-name').textContent = `${ab.name} [${ab.key}]`
+    const extras: string[] = []
+    if (ab.charges >= 0) extras.push(`${ab.charges} left`)
+    if (ab.barricades > 0) extras.push(`barricade [${p.id === 1 ? 'Q' : ','}]`)
+    const suffix = extras.length ? ` · ${extras.join(' · ')}` : ''
+    pick(panel, 'ability-state').textContent = ab.active > 0
+      ? `ACTIVE ${ab.active.toFixed(1)}s${suffix}`
+      : ab.charges === 0
+        ? `SPENT${suffix}`
+        : ab.cooldown > 0
+          ? `${ab.cooldown.toFixed(1)}s${suffix}`
+          : `READY${suffix}`
+    const abBar = pick(panel, 'ability-bar')
+    const charge = ab.active > 0 ? 1 : ab.cooldownTotal ? 1 - ab.cooldown / ab.cooldownTotal : 1
+    abBar.style.width = `${Math.max(0, Math.min(1, charge)) * 100}%`
+    abBar.className = `h-full rounded-full ${
+      ab.active > 0 ? 'bg-emerald-400' : ready ? 'bg-violet-400' : 'bg-slate-500'
+    }`
+
     panel.className = `rounded-lg bg-black/60 p-3 ring-1 ${
       p.down ? 'opacity-60 ring-red-500/50' : 'ring-white/10'
     }`
@@ -690,8 +725,8 @@ function updatePlayerPanels(h: Hud) {
 
   hudControls.innerHTML =
     h.players.length > 1
-      ? 'P1: WASD · mouse aim · left click to shoot · R to reload<br>P2: Arrow keys · auto-aim · fires automatically or with .'
-      : 'WASD / Arrows to move · Mouse to aim · Left click to shoot · R to reload'
+      ? 'P1: WASD · mouse aim · left click to shoot · R reload · E ability · Q barricade<br>P2: Arrow keys · auto-aim · fires automatically or with . · M ability · , barricade'
+      : 'WASD / Arrows to move · Mouse to aim · Left click to shoot · R to reload · E ability · Q barricade'
 }
 
 game.onHud = (h: Hud) => {

@@ -37,6 +37,13 @@ interface Player {
   down: boolean
   /** Player 2 aims and fires at the nearest enemy on its own. */
   auto: boolean
+  /** Seconds left before the active ability can be triggered again. */
+  abilityCooldown: number
+  /** Seconds left on a timed ability effect (Overdrive, Camouflage Blend). */
+  abilityActive: number
+  /** Remaining uses of a charge-limited ability; -1 when unlimited. */
+  abilityCharges: number
+  barricadeCharges: number
 }
 
 export type EnemyKind = 'zombie' | 'bug'
@@ -68,6 +75,10 @@ interface Survivor {
   speed: number
   safe: boolean
   hurtCooldown: number
+  /** Seconds spent making no progress; drives the unstick sidestep. */
+  stuck: number
+  /** Sidestep direction chosen while unsticking, in radians. */
+  detour: number
 }
 
 interface Turret {
@@ -76,6 +87,24 @@ interface Turret {
   r: number
   angle: number
   cooldown: number
+  /** Seconds of operation left before the turret powers down. */
+  life: number
+}
+
+interface Medkit {
+  x: number
+  y: number
+  /** Short delay so the kit is visible before the dropper can grab it. */
+  arm: number
+}
+
+interface Barricade {
+  x: number
+  y: number
+  w: number
+  h: number
+  hp: number
+  maxHp: number
 }
 
 interface Bullet {
@@ -110,6 +139,17 @@ export interface HudSurvivor {
   moving: boolean
 }
 
+export interface HudAbility {
+  name: string
+  key: string
+  cooldown: number
+  cooldownTotal: number
+  active: number
+  /** Remaining uses, or -1 when the ability is cooldown-gated only. */
+  charges: number
+  barricades: number
+}
+
 export interface HudPlayer {
   id: 1 | 2
   name: string
@@ -124,6 +164,7 @@ export interface HudPlayer {
   stings: number
   lives: number
   down: boolean
+  ability: HudAbility
 }
 
 export interface Hud {
@@ -164,9 +205,9 @@ const EXTRACTION_RADIUS = 70
 const SURVIVOR_SPEED = 54
 /** Survivors only advance while a player is close enough to escort them. */
 const ESCORT_RADIUS = 240
-const SURVIVOR_MAX_HP = 100
-const SURVIVOR_ZOMBIE_DAMAGE = 16
-const SURVIVOR_BUG_DAMAGE = 22
+const SURVIVOR_MAX_HP = 80
+const SURVIVOR_ZOMBIE_DAMAGE = 20
+const SURVIVOR_BUG_DAMAGE = 28
 /** Survivors only pull aggro when clearly closer than a player. */
 const SURVIVOR_AGGRO_BIAS = 0.75
 /** Co-op camera keeps this much slack around the pair before zooming out. */
@@ -176,6 +217,14 @@ const P2_AUTO_FIRE_RANGE = 620
 const TURRET_RANGE = 460
 const TURRET_INTERVAL = 0.55
 const TURRET_DAMAGE = 9
+const TURRET_LIFETIME = 30
+const OVERDRIVE_SPEED = 1.2
+const OVERDRIVE_DAMAGE = 1.5
+const MEDKIT_HEAL_FRACTION = 0.5
+const MEDKIT_ARM_TIME = 0.8
+const BARRICADE_HP = 260
+const BARRICADE_W = 130
+const BARRICADE_H = 26
 
 export class Game {
   private ctx: CanvasRenderingContext2D
@@ -196,7 +245,9 @@ export class Game {
   private bullets: Bullet[] = []
   private ammoBoxes: AmmoBox[] = []
   private survivors: Survivor[] = []
-  private turret: Turret | null = null
+  private turrets: Turret[] = []
+  private medkits: Medkit[] = []
+  private barricades: Barricade[] = []
 
   private spawnTimer = 0
   private spawned = 0
@@ -255,6 +306,10 @@ export class Game {
       safeTimer: 0,
       down: false,
       auto,
+      abilityCooldown: 0,
+      abilityActive: 0,
+      abilityCharges: character.ability.charges > 0 ? character.ability.charges : -1,
+      barricadeCharges: character.barricades,
     }
   }
 
@@ -273,11 +328,13 @@ export class Game {
         e.preventDefault()
       }
       const key = e.key.toLowerCase()
+      const p2 = this.players[1]
       if (key === 'r') this.startReload(this.p1)
-      if (key === '.') {
-        const p2 = this.players[1]
-        if (p2) p2.queuedShot = true
-      }
+      if (key === '.' && p2) p2.queuedShot = true
+      if (key === 'e') this.useAbility(this.p1)
+      if (key === 'm' && p2) this.useAbility(p2)
+      if (key === 'q') this.deployBarricade(this.p1)
+      if (key === ',' && p2) this.deployBarricade(p2)
     })
     window.addEventListener('keyup', (e) => this.keys.delete(e.key.toLowerCase()))
     window.addEventListener('blur', () => this.keys.clear())
@@ -288,6 +345,9 @@ export class Game {
       this.mouseScreen.y = e.clientY - rect.top
     })
     this.canvas.addEventListener('mousedown', (e) => {
+      // Without this the browser starts a canvas drag, which swallows every
+      // keydown until the button is released — no running while shooting.
+      e.preventDefault()
       if (e.button === 0 && this.p1) {
         this.p1.shooting = true
         this.p1.queuedShot = true
@@ -331,6 +391,9 @@ export class Game {
     this.enemies = []
     this.bullets = []
     this.ammoBoxes = []
+    this.turrets = []
+    this.medkits = []
+    this.barricades = []
     this.zoom = 1
 
     this.players = []
@@ -360,21 +423,9 @@ export class Game {
         speed: SURVIVOR_SPEED,
         safe: false,
         hurtCooldown: 0,
+        stuck: 0,
+        detour: 0,
       })
-    }
-
-    const engineer = this.players.find((p) => p.character.turret)
-    this.turret = engineer
-      ? {
-          x: engineer.x + 40,
-          y: engineer.y,
-          r: 14,
-          angle: 0,
-          cooldown: 0,
-        }
-      : null
-    if (engineer && this.turret && circleHitsWall(this.map, this.turret.x, this.turret.y, this.turret.r)) {
-      this.turret.x = engineer.x - 40
     }
 
     this.setState('playing')
@@ -446,6 +497,15 @@ export class Game {
         stings: p.stings,
         lives: p.lives,
         down: p.down,
+        ability: {
+          name: p.character.ability.name,
+          key: p.id === 1 ? 'E' : 'M',
+          cooldown: Math.max(0, p.abilityCooldown),
+          cooldownTotal: p.character.ability.cooldown,
+          active: Math.max(0, p.abilityActive),
+          charges: p.abilityCharges,
+          barricades: p.barricadeCharges,
+        },
       })),
       kills: this.kills,
       target: mission?.target ?? 0,
@@ -475,9 +535,9 @@ export class Game {
     }
     this.updateBullets(dt)
     this.updateSurvivors(dt)
-    this.updateTurret(dt)
+    this.updateTurrets(dt)
     this.updateEnemies(dt)
-    this.updatePickups()
+    this.updatePickups(dt)
     this.updateSpawning(dt)
     this.updateCamera()
     this.checkOutcome()
@@ -528,8 +588,72 @@ export class Game {
     this.setState(state)
   }
 
+  /** Triggers the character's active ability for that player. */
+  private useAbility(p: Player | undefined) {
+    if (this.state !== 'playing' || !p || p.down) return
+    if (p.abilityCooldown > 0 || p.abilityCharges === 0) return
+    const ability = p.character.ability
+
+    switch (p.character.id) {
+      case 'army-retiree':
+      case 'nature-lover':
+        p.abilityActive = ability.duration
+        break
+      case 'medic':
+        this.medkits.push({ x: p.x, y: p.y, arm: MEDKIT_ARM_TIME })
+        break
+      case 'engineer': {
+        // One turret runs at a time, twice per mission.
+        if (this.turrets.length) return
+        const spot = circleHitsWall(this.map, p.x, p.y, 14) ? null : { x: p.x, y: p.y }
+        if (!spot) return
+        this.turrets.push({ x: spot.x, y: spot.y, r: 14, angle: p.angle, cooldown: 0, life: TURRET_LIFETIME })
+        break
+      }
+    }
+
+    if (p.abilityCharges > 0) p.abilityCharges -= 1
+    p.abilityCooldown = ability.cooldown
+  }
+
+  /** Engineer's secondary: a destructible wall that blocks the horde. */
+  private deployBarricade(p: Player | undefined) {
+    if (this.state !== 'playing' || !p || p.down || p.barricadeCharges <= 0) return
+    const horizontal = Math.abs(Math.cos(p.angle)) < Math.abs(Math.sin(p.angle))
+    const w = horizontal ? BARRICADE_W : BARRICADE_H
+    const h = horizontal ? BARRICADE_H : BARRICADE_W
+    // Slide the wall back toward the player until it clears the structures.
+    for (const reach of [46, 34, 24, 16, 0]) {
+      const x = p.x + Math.cos(p.angle) * reach - w / 2
+      const y = p.y + Math.sin(p.angle) * reach - h / 2
+      if (this.rectBlocked(x, y, w, h)) continue
+      this.barricades.push({ x, y, w, h, hp: BARRICADE_HP, maxHp: BARRICADE_HP })
+      p.barricadeCharges -= 1
+      return
+    }
+  }
+
+  /** True when the rect overlaps a structure or leaves the map. */
+  private rectBlocked(x: number, y: number, w: number, h: number): boolean {
+    if (x < 0 || y < 0 || x + w > this.map.width || y + h > this.map.height) return true
+    return this.map.walls.some(
+      (s) => x < s.x + s.w && x + w > s.x && y < s.y + s.h && y + h > s.y
+    )
+  }
+
+  private hitsBarricade(x: number, y: number, r: number): Barricade | null {
+    for (const b of this.barricades) {
+      const cx = clamp(x, b.x, b.x + b.w)
+      const cy = clamp(y, b.y, b.y + b.h)
+      if (Math.hypot(x - cx, y - cy) < r) return b
+    }
+    return null
+  }
+
   private updatePlayer(p: Player, dt: number) {
     const k = this.keys
+    p.abilityCooldown = Math.max(0, p.abilityCooldown - dt)
+    p.abilityActive = Math.max(0, p.abilityActive - dt)
     const solo = this.players.length === 1
     let dx = 0
     let dy = 0
@@ -549,7 +673,8 @@ export class Game {
       dx /= len
       dy /= len
     }
-    const step = p.speed * dt
+    const boosted = p.character.id === 'army-retiree' && p.abilityActive > 0
+    const step = p.speed * (boosted ? OVERDRIVE_SPEED : 1) * dt
     this.moveCircle(p, dx * step, dy * step)
 
     if (p.auto) {
@@ -600,6 +725,19 @@ export class Game {
     return best
   }
 
+  /** Enemy movement also respects deployed barricades. */
+  private moveEnemy(z: Enemy, dx: number, dy: number) {
+    const m = this.map
+    if (dx) {
+      const nx = clamp(z.x + dx, z.r, m.width - z.r)
+      if (!circleHitsWall(m, nx, z.y, z.r) && !this.hitsBarricade(nx, z.y, z.r)) z.x = nx
+    }
+    if (dy) {
+      const ny = clamp(z.y + dy, z.r, m.height - z.r)
+      if (!circleHitsWall(m, z.x, ny, z.r) && !this.hitsBarricade(z.x, ny, z.r)) z.y = ny
+    }
+  }
+
   private moveCircle(e: { x: number; y: number; r: number }, dx: number, dy: number) {
     const m = this.map
     if (dx) {
@@ -647,6 +785,8 @@ export class Game {
     const w = p.weapon
     p.shotsFired += 1
     const acidShot = w.perk === 'acidic-spray' && p.shotsFired % ACID_SHOT_INTERVAL === 0
+    const overdrive = p.character.id === 'army-retiree' && p.abilityActive > 0
+    const damage = w.damage * (overdrive ? OVERDRIVE_DAMAGE : 1)
 
     for (let i = 0; i < w.pellets; i++) {
       const spread = (Math.random() - 0.5) * w.spread * (w.pellets > 1 ? 2 : 1)
@@ -661,11 +801,17 @@ export class Game {
         maxLife: w.bulletLife,
         falloff: w.falloff ?? 1,
         tracerLength: w.perk === 'armor-piercing' ? 56 : w.pellets > 1 ? 10 : 18,
-        damage: w.damage,
+        damage,
         pierce: w.perk === 'armor-piercing',
         poison: acidShot,
         ignite: w.perk === 'dragons-breath',
-        color: acidShot ? '#7cf03d' : w.perk === 'dragons-breath' ? '#ff7a18' : '#ffe066',
+        color: acidShot
+          ? '#7cf03d'
+          : overdrive
+            ? '#ff4d4d'
+            : w.perk === 'dragons-breath'
+              ? '#ff7a18'
+              : '#ffe066',
         width: acidShot ? w.tracerWidth + 1 : w.tracerWidth,
         hit: new Set<Enemy>(),
       })
@@ -674,9 +820,24 @@ export class Game {
     playShot(w)
   }
 
-  private updateTurret(dt: number) {
-    const t = this.turret
-    if (!t) return
+  /** True while Camouflage Blend hides this player from every enemy. */
+  private isCloaked(p: Player): boolean {
+    return p.character.id === 'nature-lover' && p.abilityActive > 0
+  }
+
+  private updateTurrets(dt: number) {
+    for (let i = this.turrets.length - 1; i >= 0; i--) {
+      const t = this.turrets[i]
+      t.life -= dt
+      if (t.life <= 0) {
+        this.turrets.splice(i, 1)
+        continue
+      }
+      this.updateTurret(t, dt)
+    }
+  }
+
+  private updateTurret(t: Turret, dt: number) {
     t.cooldown = Math.max(0, t.cooldown - dt)
 
     let closest: Enemy | null = null
@@ -781,8 +942,9 @@ export class Game {
       uy /= len
 
       const step = s.speed * dt
-      const base = Math.atan2(uy, ux)
-      for (const offset of [0, 0.5, -0.5, 1.1, -1.1, 1.7, -1.7]) {
+      const base = Math.atan2(uy, ux) + (s.stuck > 0 ? s.detour : 0)
+      const before = { x: s.x, y: s.y }
+      for (const offset of [0, 0.4, -0.4, 0.9, -0.9, 1.4, -1.4, 2.1, -2.1]) {
         const a = base + offset
         const nx = s.x + Math.cos(a) * step
         const ny = s.y + Math.sin(a) * step
@@ -790,6 +952,14 @@ export class Game {
         s.x = nx
         s.y = ny
         break
+      }
+
+      // Wedged against a corner: commit to a sidestep for a moment.
+      if (Math.hypot(s.x - before.x, s.y - before.y) < step * 0.4) {
+        if (s.stuck <= 0) s.detour = Math.random() < 0.5 ? Math.PI / 2 : -Math.PI / 2
+        s.stuck = 0.7
+      } else {
+        s.stuck = Math.max(0, s.stuck - dt)
       }
     }
   }
@@ -826,6 +996,8 @@ export class Game {
     }
     let bestD = Infinity
     for (const p of this.alivePlayers) {
+      // Camouflage Blend drops all aggro on that player.
+      if (this.isCloaked(p)) continue
       const d = Math.hypot(p.x - z.x, p.y - z.y)
       if (d < bestD) {
         bestD = d
@@ -875,7 +1047,7 @@ export class Game {
       z.aware = z.aware ? d < sight * VISION_HYSTERESIS : d < sight
       if (!z.aware) {
         z.driftAngle += (Math.random() - 0.5) * dt * 2
-        this.moveCircle(
+        this.moveEnemy(
           z,
           Math.cos(z.driftAngle) * step * 0.3,
           Math.sin(z.driftAngle) * step * 0.3
@@ -888,9 +1060,18 @@ export class Game {
       const uy = (dy / d) * dir
       const px = -uy * wob
       const py = ux * wob
-      this.moveCircle(z, (ux + px) * step, (uy + py) * step)
+      this.moveEnemy(z, (ux + px) * step, (uy + py) * step)
 
       z.attackCooldown = Math.max(0, z.attackCooldown - dt)
+
+      // Chew through any barricade standing between the enemy and its target.
+      const wall = this.hitsBarricade(z.x + ux * (z.r + 6), z.y + uy * (z.r + 6), z.r)
+      if (wall && z.attackCooldown === 0) {
+        wall.hp -= z.kind === 'bug' ? 10 : 18
+        z.attackCooldown = 0.6
+        if (wall.hp <= 0) this.barricades.splice(this.barricades.indexOf(wall), 1)
+        continue
+      }
       const victim = target.survivor
       const hunted = target.player
       const reach = z.r + (victim ? victim.r : hunted ? hunted.r : 0)
@@ -916,13 +1097,28 @@ export class Game {
     }
   }
 
-  private updatePickups() {
+  private updatePickups(dt: number) {
     for (let i = this.ammoBoxes.length - 1; i >= 0; i--) {
       const a = this.ammoBoxes[i]
       const taker = this.alivePlayers.find((p) => Math.hypot(a.x - p.x, a.y - p.y) < p.r + 14)
       if (taker) {
         taker.reserve += a.amount
         this.ammoBoxes.splice(i, 1)
+      }
+    }
+
+    for (let i = this.medkits.length - 1; i >= 0; i--) {
+      const kit = this.medkits[i]
+      kit.arm = Math.max(0, kit.arm - dt)
+      if (kit.arm > 0) continue
+      const taker = this.alivePlayers.find(
+        (p) => p.hp < p.maxHp && Math.hypot(kit.x - p.x, kit.y - p.y) < p.r + 16
+      )
+      if (taker) {
+        taker.hp = Math.round(
+          Math.min(taker.maxHp, taker.hp + (taker.maxHp - taker.hp) * MEDKIT_HEAL_FRACTION)
+        )
+        this.medkits.splice(i, 1)
       }
     }
   }
@@ -1055,9 +1251,12 @@ export class Game {
       ctx.strokeRect(a.x - 8, a.y - 6, 16, 12)
     }
 
+    for (const kit of this.medkits) this.drawMedkit(kit)
+    for (const b of this.barricades) this.drawBarricade(b)
+
     for (const s of this.survivors) this.drawSurvivor(s)
     if (this.mission?.type === 'protect') this.drawSurvivorHealthBars()
-    if (this.turret) this.drawTurret(this.turret)
+    for (const t of this.turrets) this.drawTurret(t)
 
     for (const e of this.enemies) {
       if (e.kind === 'bug') this.drawBug(e)
@@ -1273,6 +1472,46 @@ export class Game {
     }
   }
 
+  private drawMedkit(kit: Medkit) {
+    const ctx = this.ctx
+    ctx.fillStyle = '#f8fafc'
+    ctx.fillRect(kit.x - 11, kit.y - 9, 22, 18)
+    ctx.strokeStyle = '#0f172a'
+    ctx.lineWidth = 2
+    ctx.strokeRect(kit.x - 11, kit.y - 9, 22, 18)
+    ctx.fillStyle = '#ef4444'
+    ctx.fillRect(kit.x - 2.5, kit.y - 6, 5, 12)
+    ctx.fillRect(kit.x - 7, kit.y - 2.5, 14, 5)
+  }
+
+  private drawBarricade(b: Barricade) {
+    const ctx = this.ctx
+    ctx.save()
+    ctx.fillStyle = '#7c5c2b'
+    ctx.fillRect(b.x, b.y, b.w, b.h)
+    ctx.strokeStyle = '#3f2d12'
+    ctx.lineWidth = 3
+    ctx.strokeRect(b.x, b.y, b.w, b.h)
+    ctx.strokeStyle = 'rgba(0,0,0,0.35)'
+    ctx.lineWidth = 2
+    const along = b.w > b.h
+    for (let i = 14; i < (along ? b.w : b.h); i += 18) {
+      ctx.beginPath()
+      if (along) {
+        ctx.moveTo(b.x + i, b.y)
+        ctx.lineTo(b.x + i, b.y + b.h)
+      } else {
+        ctx.moveTo(b.x, b.y + i)
+        ctx.lineTo(b.x + b.w, b.y + i)
+      }
+      ctx.stroke()
+    }
+    const pct = Math.max(0, b.hp) / b.maxHp
+    ctx.fillStyle = pct > 0.5 ? '#22c55e' : pct > 0.25 ? '#f59e0b' : '#ef4444'
+    ctx.fillRect(b.x, b.y - 8, b.w * pct, 4)
+    ctx.restore()
+  }
+
   private drawTurret(t: Turret) {
     const ctx = this.ctx
     ctx.save()
@@ -1353,6 +1592,26 @@ export class Game {
     ctx.save()
     ctx.translate(p.x, p.y)
     if (p.down) ctx.globalAlpha = 0.4
+
+    if (this.isCloaked(p)) {
+      // Leaf cloud while Camouflage Blend is running.
+      ctx.globalAlpha = 0.55
+      for (let i = 0; i < 8; i++) {
+        const a = (i / 8) * Math.PI * 2 + p.abilityActive * 1.6
+        const d = p.r + 12 + Math.sin(p.abilityActive * 4 + i) * 5
+        ctx.beginPath()
+        ctx.ellipse(Math.cos(a) * d, Math.sin(a) * d, 7, 4, a, 0, Math.PI * 2)
+        ctx.fillStyle = i % 2 ? '#4ade80' : '#a3e635'
+        ctx.fill()
+      }
+    }
+    if (p.character.id === 'army-retiree' && p.abilityActive > 0) {
+      ctx.beginPath()
+      ctx.arc(0, 0, p.r + 8, 0, Math.PI * 2)
+      ctx.strokeStyle = 'rgba(255,77,77,0.85)'
+      ctx.lineWidth = 3
+      ctx.stroke()
+    }
 
     ctx.save()
     ctx.rotate(p.angle)
@@ -1457,11 +1716,15 @@ export class Game {
       ctx.fill()
     }
 
-    if (this.turret) {
-      ctx.fillStyle = '#a78bfa'
+    ctx.fillStyle = '#a78bfa'
+    for (const t of this.turrets) {
       ctx.beginPath()
-      ctx.arc(mx + this.turret.x * s, my + this.turret.y * s, 3, 0, Math.PI * 2)
+      ctx.arc(mx + t.x * s, my + t.y * s, 3, 0, Math.PI * 2)
       ctx.fill()
+    }
+    ctx.fillStyle = '#7c5c2b'
+    for (const b of this.barricades) {
+      ctx.fillRect(mx + b.x * s, my + b.y * s, Math.max(1, b.w * s), Math.max(1, b.h * s))
     }
 
     for (const p of this.players) {

@@ -9,3 +9,10 @@ body,
   overflow: hidden;
   font-family: ui-sans-serif, system-ui, sans-serif;
 }
+
+/* Dragging the canvas would steal keyboard focus mid-firefight. */
+canvas {
+  user-select: none;
+  -webkit-user-drag: none;
+  touch-action: none;
+}
