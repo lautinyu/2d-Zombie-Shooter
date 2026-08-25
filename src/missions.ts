@@ -21,6 +21,8 @@ export interface Mission {
   unlocks: string[]
   /** Payout multiplier — branch missions pay noticeably better. */
   payout: number
+  /** Flat payout base, for missions whose difficulty isn't a kill count. */
+  rewardBase?: number
   /** The finale only opens once both campaign branches are finished. */
   requiresAllPaths?: boolean
 }
@@ -109,6 +111,7 @@ export const MISSIONS: Mission[] = [
     path: null,
     unlocks: [],
     payout: 3,
+    rewardBase: 140,
     requiresAllPaths: true,
   },
 ]

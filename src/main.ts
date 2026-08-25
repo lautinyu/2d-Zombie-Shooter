@@ -949,6 +949,10 @@ el('win-btn').addEventListener('click', () => game.toMenu())
 el('lose-menu-btn').addEventListener('click', () => game.toMenu())
 el('retry-btn').addEventListener('click', () => launch(currentMission))
 
+// Autoplay policies: the audio engine only builds its context after a gesture.
+window.addEventListener('pointerdown', resumeAudio)
+window.addEventListener('keydown', resumeAudio)
+
 persist()
 renderDetail()
 renderCharacters()

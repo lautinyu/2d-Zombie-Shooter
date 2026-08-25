@@ -57,11 +57,13 @@ let master: GainNode | null = null
 let musicGain: GainNode | null = null
 let musicTimer: number | null = null
 let currentTrack: MusicTrack | null = null
+/** Set on the first user gesture; a context built before that stays suspended. */
+let unlocked = false
 
 function ensureContext(): AudioContext | null {
   if (context) return context
   const Ctor = window.AudioContext
-  if (!Ctor) return null
+  if (!Ctor || !unlocked) return null
   context = new Ctor()
   master = context.createGain()
   master.gain.value = 0.9
@@ -74,6 +76,7 @@ function ensureContext(): AudioContext | null {
 
 /** Browsers hold the context suspended until the first gesture. */
 export function resumeAudio() {
+  unlocked = true
   const ctx = ensureContext()
   if (ctx && ctx.state === 'suspended') void ctx.resume()
 }

@@ -271,12 +271,12 @@ const BARRICADE_HP = 260
 const BARRICADE_W = 130
 const BARRICADE_H = 26
 const BOSS_NAME = 'The Hive Mother'
-const BOSS_MAX_HP = 2600
+const BOSS_MAX_HP = 1800
 const BOSS_RADIUS = 62
 const BOSS_SPEED = 62
 const BOSS_ENRAGE_SPEED = 1.3
 const BOSS_RING_INTERVAL = 3.4
-const BOSS_RING_SHOTS = 14
+const BOSS_RING_SHOTS = 12
 const BOSS_BROOD_INTERVAL = 6
 const BOSS_BROOD_MAX = 8
 const BOSS_DASH_INTERVAL = 8
@@ -284,7 +284,7 @@ const BOSS_DASH_TIME = 0.75
 const BOSS_DASH_SPEED = 640
 const BOSS_CONTACT_DAMAGE = 22
 const VENOM_SPEED = 210
-const VENOM_LIFE = 4.5
+const VENOM_LIFE = 3
 
 export class Game {
   private ctx: CanvasRenderingContext2D
@@ -1152,7 +1152,7 @@ export class Game {
           // Venom is a sting: it feeds the infection meter, not just health.
           p.stings += 1
           p.hp -= 5
-          p.hurtCooldown = 0.5
+          p.hurtCooldown = 1.2
           p.safeTimer = 0
           playSfx('sting')
           dead = true

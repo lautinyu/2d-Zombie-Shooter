@@ -99,7 +99,12 @@ export function saveProfile(profile: Profile) {
 export const SCRAP_PER_KILL = 2
 export const SCRAP_PER_BUG = 4
 
-export function missionReward(mission: { target: number; survivors: number; payout: number }): number {
-  const base = 20 + mission.target * 2 + mission.survivors * 25
+export function missionReward(mission: {
+  target: number
+  survivors: number
+  payout: number
+  rewardBase?: number
+}): number {
+  const base = (mission.rewardBase ?? 20) + mission.target * 2 + mission.survivors * 25
   return Math.round(base * mission.payout)
 }
