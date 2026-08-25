@@ -26,6 +26,7 @@ export type SfxId =
   | 'sting'
   | 'boss-roar'
   | 'boss-dash'
+  | 'type'
 
 const SFX: Record<SfxId, SoundProfile> = {
   turret: { startFreq: 180, endFreq: 620, duration: 0.28, type: 'square', gain: 0.14 },
@@ -37,9 +38,10 @@ const SFX: Record<SfxId, SoundProfile> = {
   sting: { startFreq: 980, endFreq: 300, duration: 0.16, type: 'square', gain: 0.12 },
   'boss-roar': { startFreq: 90, endFreq: 38, duration: 1.4, type: 'sawtooth', gain: 0.26 },
   'boss-dash': { startFreq: 420, endFreq: 110, duration: 0.5, type: 'square', gain: 0.2 },
+  type: { startFreq: 640, endFreq: 520, duration: 0.03, type: 'square', gain: 0.03 },
 }
 
-export type MusicTrack = 'menu' | 'battle' | 'boss' | 'gameover' | 'victory'
+export type MusicTrack = 'menu' | 'battle' | 'boss' | 'gameover' | 'victory' | 'story'
 
 /** Note tables are semitone offsets from A2, played as a looping bass riff. */
 const TRACKS: Record<MusicTrack, { notes: number[]; step: number; loop: boolean; type: OscillatorType; lead: boolean }> = {
@@ -48,6 +50,8 @@ const TRACKS: Record<MusicTrack, { notes: number[]; step: number; loop: boolean;
   boss: { notes: [-5, -5, -2, -5, 2, 1, 0, -5, -5, -5, 3, 2], step: 0.17, loop: true, type: 'sawtooth', lead: true },
   gameover: { notes: [7, 5, 3, 0, -2, -5], step: 0.55, loop: false, type: 'triangle', lead: false },
   victory: { notes: [0, 4, 7, 12, 7, 12], step: 0.22, loop: false, type: 'square', lead: false },
+  // Slow, atmospheric drone under the story cutscenes.
+  story: { notes: [-12, -12, -5, -8, -12, -10, -7, -12], step: 1.1, loop: true, type: 'sine', lead: false },
 }
 
 const A2 = 110

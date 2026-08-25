@@ -361,6 +361,10 @@ const BOSS_DASH_SPEED = 640
 const BOSS_CONTACT_DAMAGE = 22
 const VENOM_SPEED = 210
 const VENOM_LIFE = 3
+/** How close a player must get to the hive centre to trigger the reveal. */
+const BOSS_REVEAL_RANGE = 320
+const BOSS_REVEAL_TIME = 3.6
+const BOSS_REVEAL_LINE = 'There she is... the source of the infection. Eyes up, let\'s take it down!'
 
 export class Game {
   private ctx: CanvasRenderingContext2D
@@ -408,6 +412,18 @@ export class Game {
   private runAndGunChecked = false
   private mouseWorld = { x: 0, y: 0 }
   private mouseScreen = { x: 0, y: 0 }
+
+  /**
+   * Boss reveal cinematic. 'pending' keeps the Hive Mother dormant until a
+   * player reaches the middle of the map; 'playing' locks controls while the
+   * camera slides onto her; 'done' hands control back and starts phase 1.
+   */
+  private reveal: 'off' | 'pending' | 'playing' | 'done' = 'off'
+  private revealTimer = 0
+  private bubbleTimer = 0
+  private shake = 0
+  /** Seconds of eased camera motion left after the cinematic hands back. */
+  private cameraEase = 0
 
   private camera = { x: 0, y: 0 }
   private zoom = 1
@@ -561,16 +577,25 @@ export class Game {
     this.mutationFade = 0
     this.zoom = 1
     this.runAndGunChecked = false
+    this.reveal = mission.type === 'boss' ? 'pending' : 'off'
+    this.revealTimer = 0
+    this.bubbleTimer = 0
+    this.shake = 0
+    this.cameraEase = 0
 
     this.players = []
     characters.slice(0, 2).forEach((c, i) => {
       const id: 1 | 2 = i === 0 ? 1 : 2
-      // Player 1 starts near the middle of the map, not pinned to an edge.
+      // Player 1 starts near the middle of the map, not pinned to an edge —
+      // except on the finale, where the walk to the hive centre is the trigger
+      // for the boss reveal.
       const centre = { x: this.map.width / 2, y: this.map.height / 2 }
+      const solo =
+        mission.type === 'boss'
+          ? this.openSpot(PLAYER_RADIUS + 10, centre, BOSS_REVEAL_RANGE * 2.2, 1200)
+          : this.openSpot(PLAYER_RADIUS + 10, centre, 0, 420)
       const spawn =
-        i === 0
-          ? this.openSpot(PLAYER_RADIUS + 10, centre, 0, 420)
-          : this.openSpot(PLAYER_RADIUS + 10, this.players[0], 50, 180)
+        i === 0 ? solo : this.openSpot(PLAYER_RADIUS + 10, this.players[0], 50, 180)
       this.players.push(this.makePlayer(id, spawn.x, spawn.y, weapon, c, id === 2))
     })
 
@@ -597,7 +622,13 @@ export class Game {
     }
 
     if (mission.type === 'boss') {
-      const spot = this.openSpot(BOSS_RADIUS + 12, this.p1, 700, 1200)
+      // She nests in the middle of the hive, where the reveal fires.
+      const spot = this.openSpot(
+        BOSS_RADIUS + 12,
+        { x: this.map.width / 2, y: this.map.height / 2 },
+        0,
+        260
+      )
       this.boss = {
         x: spot.x,
         y: spot.y,
@@ -616,7 +647,6 @@ export class Game {
         hurt: 0,
         attackCooldown: 0,
       }
-      playSfx('boss-roar')
     }
 
     playMusic(mission.type === 'boss' ? 'boss' : 'battle')
@@ -739,6 +769,22 @@ export class Game {
   }
 
   private update(dt: number) {
+    this.shake = Math.max(0, this.shake - dt * 1.6)
+    this.bubbleTimer = Math.max(0, this.bubbleTimer - dt)
+    this.cameraEase = Math.max(0, this.cameraEase - dt)
+    if (this.reveal === 'pending') this.checkRevealTrigger()
+    if (this.reveal === 'playing') {
+      // Controls are locked: nothing but the camera moves during the reveal.
+      this.revealTimer -= dt
+      if (this.revealTimer <= 0) {
+        this.reveal = 'done'
+        this.cameraEase = 1.2
+        clearInput()
+      }
+      this.updateCamera()
+      return
+    }
+
     for (const p of this.players) {
       if (p.down) continue
       this.updatePlayer(p, dt)
@@ -757,6 +803,24 @@ export class Game {
     this.updateCamera()
     this.updateAmbience(dt)
     this.checkOutcome()
+  }
+
+  /** Walking into the middle of the hive hands the scene over to the boss. */
+  private checkRevealTrigger() {
+    const boss = this.boss
+    if (!boss) return
+    const cx = this.map.width / 2
+    const cy = this.map.height / 2
+    const arrived = this.alivePlayers.some(
+      (p) => Math.hypot(p.x - cx, p.y - cy) < BOSS_REVEAL_RANGE
+    )
+    if (!arrived) return
+    this.reveal = 'playing'
+    this.revealTimer = BOSS_REVEAL_TIME
+    this.bubbleTimer = BOSS_REVEAL_TIME + 0.8
+    this.shake = 1
+    clearInput()
+    playSfx('boss-roar')
   }
 
   /** Rolls a fresh global enemy modifier every MUTATION_INTERVAL seconds. */
@@ -1253,6 +1317,8 @@ export class Game {
   private updateBoss(dt: number) {
     const b = this.boss
     if (!b || b.hp <= 0) return
+    // She only stirs once the reveal cinematic has played.
+    if (this.reveal === 'pending' || this.reveal === 'playing') return
     b.wobble += dt
     b.hurt = Math.max(0, b.hurt - dt)
     b.attackCooldown = Math.max(0, b.attackCooldown - dt)
@@ -1759,8 +1825,20 @@ export class Game {
 
     const worldW = this.viewW / this.zoom
     const worldH = this.viewH / this.zoom
-    this.camera.x = clamp(cx - worldW / 2, 0, Math.max(0, m.width - worldW))
-    this.camera.y = clamp(cy - worldH / 2, 0, Math.max(0, m.height - worldH))
+    const boss = this.boss
+    const focusBoss = this.reveal === 'playing' && boss !== null
+    const fx = focusBoss && boss ? boss.x : cx
+    const fy = focusBoss && boss ? boss.y : cy
+    const camX = clamp(fx - worldW / 2, 0, Math.max(0, m.width - worldW))
+    const camY = clamp(fy - worldH / 2, 0, Math.max(0, m.height - worldH))
+    if (focusBoss || this.cameraEase > 0) {
+      // Cinematic slide: ease onto the boss and back to the players after.
+      this.camera.x += (camX - this.camera.x) * 0.07
+      this.camera.y += (camY - this.camera.y) * 0.07
+    } else {
+      this.camera.x = camX
+      this.camera.y = camY
+    }
   }
 
   private render() {
@@ -1769,6 +1847,10 @@ export class Game {
     ctx.fillStyle = '#0b0f0d'
     ctx.fillRect(0, 0, this.viewW, this.viewH)
     ctx.save()
+    if (this.shake > 0) {
+      const amp = this.shake * 12
+      ctx.translate((Math.random() * 2 - 1) * amp, (Math.random() * 2 - 1) * amp)
+    }
     this.applyWorldTransform()
 
     ctx.fillStyle = m.color
@@ -1827,6 +1909,7 @@ export class Game {
       this.drawGroundShadow(p.x, p.y, p.r)
       this.drawPlayer(p)
     }
+    if (this.bubbleTimer > 0) this.drawRevealBubble()
     ctx.restore()
 
     this.drawCrosshair()
@@ -2607,6 +2690,40 @@ export class Game {
     ctx.fillText(m.name.toUpperCase(), m.width / 2, 140)
     ctx.fillText(m.name.toUpperCase(), m.width / 2, m.height - 100)
     ctx.textAlign = 'left'
+  }
+
+  /** Floating speech bubble over player 1 during the Hive Mother reveal. */
+  private drawRevealBubble() {
+    const speaker = this.alivePlayers[0] ?? this.players[0]
+    if (!speaker) return
+    const ctx = this.ctx
+    const text = BOSS_REVEAL_LINE
+    ctx.save()
+    ctx.font = 'bold 15px system-ui, sans-serif'
+    ctx.textAlign = 'center'
+    ctx.textBaseline = 'middle'
+    const w = ctx.measureText(text).width + 28
+    const h = 34
+    const x = speaker.x
+    const y = speaker.y - speaker.r - 44
+    ctx.globalAlpha = Math.min(1, this.bubbleTimer * 2)
+    ctx.fillStyle = 'rgba(8,12,20,0.88)'
+    ctx.strokeStyle = '#fb923c'
+    ctx.lineWidth = 2
+    ctx.beginPath()
+    ctx.roundRect(x - w / 2, y - h / 2, w, h, 10)
+    ctx.fill()
+    ctx.stroke()
+    ctx.beginPath()
+    ctx.moveTo(x - 8, y + h / 2)
+    ctx.lineTo(x + 8, y + h / 2)
+    ctx.lineTo(x, y + h / 2 + 12)
+    ctx.closePath()
+    ctx.fillStyle = 'rgba(8,12,20,0.88)'
+    ctx.fill()
+    ctx.fillStyle = '#fde68a'
+    ctx.fillText(text, x, y)
+    ctx.restore()
   }
 
   private drawPlayer(p: Player) {

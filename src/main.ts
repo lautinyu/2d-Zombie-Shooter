@@ -12,6 +12,7 @@ import type { CharacterId } from './characters'
 import { TEXTURE_PACKS } from './theme'
 import type { TexturePack } from './theme'
 import { playMusic, resumeAudio, stopMusic } from './audio'
+import { playBossDialogue, playStoryIntro } from './cutscene'
 
 declare global {
   interface Window {
@@ -99,6 +100,9 @@ app.innerHTML = `
       <h1 class="text-center text-5xl font-black tracking-tight text-emerald-400 drop-shadow">ZOMBIE SHOOTER</h1>
       <p class="mt-2 text-center text-sm text-slate-400">Top-down survival · pick a mission, clear the zone, get out alive.</p>
       <div class="mt-4 text-center text-sm font-bold text-yellow-300">Scrap: <span id="menu-scrap">0</span></div>
+      <div class="mt-5 flex justify-center">
+        <button id="start-btn" class="rounded-xl bg-emerald-500 px-10 py-3 text-lg font-black tracking-wide text-emerald-950 hover:bg-emerald-400">Start Game</button>
+      </div>
       <div class="mt-4 flex flex-wrap justify-center gap-3">
         <button id="lore-btn" class="rounded-lg bg-orange-500/15 px-6 py-2 text-sm font-bold text-orange-300 ring-1 ring-orange-400/40 hover:bg-orange-500/25">Lore / Story</button>
         <button id="shop-btn" class="rounded-lg bg-yellow-500/15 px-6 py-2 text-sm font-bold text-yellow-300 ring-1 ring-yellow-400/40 hover:bg-yellow-500/25">Weapons Shop</button>
@@ -371,8 +375,14 @@ function renderIntro() {
     `
     card.addEventListener('click', () => {
       resumeAudio()
+      const firstBoot = !profile.textures
       setTextures(pack.id)
       show(introScreen, false)
+      // First boot runs the lore cinematic before the survivor is picked.
+      if (firstBoot) {
+        startGameFlow()
+        return
+      }
       if (profile.character) show(menu, true)
       else show(characterScreen, true)
       playMusic('menu')
@@ -444,6 +454,21 @@ el('textures-btn').addEventListener('click', () => {
   show(introScreen, true)
 })
 
+/** Story crawl, then survivor select (or straight to the campaign). */
+function startGameFlow() {
+  show(menu, false)
+  show(characterScreen, false)
+  playStoryIntro(() => {
+    if (profile.character) {
+      show(menu, true)
+      playMusic('menu')
+    } else {
+      renderCharacters()
+      show(characterScreen, true)
+    }
+  })
+}
+
 function launch(m: Mission) {
   currentMission = m
   if (m.path && profile.path === null) {
@@ -452,7 +477,14 @@ function launch(m: Mission) {
   }
   const roster = [characterById(activeCharacter())]
   if (profile.players === 2) roster.push(characterById(secondCharacter()))
-  game.startMission(m, weaponById(profile.equipped), roster)
+  const begin = () => game.startMission(m, weaponById(profile.equipped), roster)
+  // The finale opens with a character-driven briefing scene.
+  if (m.type === 'boss') {
+    show(menu, false)
+    playBossDialogue(activeCharacter(), begin)
+    return
+  }
+  begin()
 }
 
 function activeCharacter(): CharacterId {
@@ -966,6 +998,7 @@ game.onHud = (h: Hud) => {
   hudScrap.textContent = `+${h.scrap} scrap`
 }
 
+el('start-btn').addEventListener('click', startGameFlow)
 el('lore-btn').addEventListener('click', () => {
   show(menu, false)
   show(loreScreen, true)
