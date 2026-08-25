@@ -9,6 +9,7 @@ import type { GameMap, Rect } from './maps'
 import { circleHitsWall, mapById } from './maps'
 import { extractionField, flowDirection } from './nav'
 import { drawCharacterSkin } from './skins'
+import { bindInput, clearInput, keysPressed } from './input'
 
 export type GameState = 'menu' | 'playing' | 'won' | 'lost'
 
@@ -21,6 +22,9 @@ interface Player {
   maxHp: number
   speed: number
   angle: number
+  /** Velocity applied this frame, from the movement keys only. */
+  vx: number
+  vy: number
   hurtCooldown: number
   character: Character
   weapon: Weapon
@@ -252,7 +256,7 @@ export class Game {
   private spawnTimer = 0
   private spawned = 0
 
-  private keys = new Set<string>()
+  private runAndGunChecked = false
   private mouseWorld = { x: 0, y: 0 }
   private mouseScreen = { x: 0, y: 0 }
 
@@ -291,6 +295,8 @@ export class Game {
       maxHp: 100,
       speed: PLAYER_BASE_SPEED * character.speedMultiplier,
       angle: 0,
+      vx: 0,
+      vy: 0,
       hurtCooldown: 0,
       character,
       weapon,
@@ -321,76 +327,26 @@ export class Game {
     return this.players.filter((p) => !p.down)
   }
 
-  /** Both the layout key and the physical code, so held keys survive anything. */
-  private keyNames(e: KeyboardEvent): string[] {
-    const names = [e.key.toLowerCase()]
-    const code = e.code.toLowerCase()
-    if (code.startsWith('key')) names.push(code.slice(3))
-    else if (code.startsWith('digit')) names.push(code.slice(5))
-    else if (code.startsWith('numpad')) names.push(code.slice(6))
-    else if (code) names.push(code)
-    return names
-  }
-
   private bindInput() {
-    // Movement lives purely in this key set. Nothing on the pointer path ever
-    // writes to it, so holding fire cannot disturb a run in progress.
-    window.addEventListener(
-      'keydown',
-      (e) => {
-        for (const name of this.keyNames(e)) this.keys.add(name)
-        if (['arrowup', 'arrowdown', 'arrowleft', 'arrowright', ' '].includes(e.key.toLowerCase())) {
-          e.preventDefault()
-        }
-        if (e.repeat) return
-        const key = e.key.toLowerCase()
+    bindInput(this.canvas, {
+      reload: () => this.startReload(this.p1),
+      p1Ability: () => this.useAbility(this.p1),
+      p2Ability: () => this.useAbility(this.players[1]),
+      p1Barricade: () => this.deployBarricade(this.p1),
+      p2Barricade: () => this.deployBarricade(this.players[1]),
+      p1Shot: () => {
+        if (this.p1) this.p1.queuedShot = true
+      },
+      p2Shot: () => {
         const p2 = this.players[1]
-        if (key === 'r') this.startReload(this.p1)
-        if (key === '.' && p2) p2.queuedShot = true
-        if (key === 'e') this.useAbility(this.p1)
-        if (key === 'm' && p2) this.useAbility(p2)
-        if (key === 'q') this.deployBarricade(this.p1)
-        if (key === ',' && p2) this.deployBarricade(p2)
+        if (p2) p2.queuedShot = true
       },
-      { capture: true }
-    )
-    window.addEventListener(
-      'keyup',
-      (e) => {
-        for (const name of this.keyNames(e)) this.keys.delete(name)
+      aim: (x, y) => {
+        this.mouseScreen.x = x
+        this.mouseScreen.y = y
       },
-      { capture: true }
-    )
-    window.addEventListener('blur', () => {
-      this.keys.clear()
-      for (const p of this.players) p.shooting = false
+      canShoot: () => this.state === 'playing' && Boolean(this.p1),
     })
-
-    const aimAt = (e: MouseEvent) => {
-      const rect = this.canvas.getBoundingClientRect()
-      this.mouseScreen.x = e.clientX - rect.left
-      this.mouseScreen.y = e.clientY - rect.top
-    }
-    window.addEventListener('mousemove', aimAt)
-    // Pointer events on the window: the shot registers even if the press lands
-    // on a HUD overlay, and the browser never starts a canvas drag or a text
-    // selection that would swallow the keyboard while the button is held.
-    window.addEventListener('pointerdown', (e) => {
-      if (e.button !== 0 || this.state !== 'playing' || !this.p1) return
-      aimAt(e)
-      this.p1.shooting = true
-      this.p1.queuedShot = true
-    })
-    const release = () => {
-      if (this.p1) this.p1.shooting = false
-    }
-    window.addEventListener('pointerup', (e) => {
-      if (e.button === 0) release()
-    })
-    window.addEventListener('pointercancel', release)
-    this.canvas.addEventListener('dragstart', (e) => e.preventDefault())
-    this.canvas.addEventListener('selectstart', (e) => e.preventDefault())
-    this.canvas.addEventListener('contextmenu', (e) => e.preventDefault())
   }
 
   private resize() {
@@ -429,6 +385,7 @@ export class Game {
     this.medkits = []
     this.barricades = []
     this.zoom = 1
+    this.runAndGunChecked = false
 
     this.players = []
     characters.slice(0, 2).forEach((c, i) => {
@@ -499,6 +456,8 @@ export class Game {
 
   start() {
     if (this.running) return
+    // A press that started a mission must not linger as a held trigger.
+    clearInput()
     this.running = true
     this.last = performance.now()
     requestAnimationFrame(this.loop)
@@ -685,22 +644,24 @@ export class Game {
   }
 
   private updatePlayer(p: Player, dt: number) {
-    const k = this.keys
+    const k = keysPressed
     p.abilityCooldown = Math.max(0, p.abilityCooldown - dt)
     p.abilityActive = Math.max(0, p.abilityActive - dt)
     const solo = this.players.length === 1
+    // Velocity is derived only from the movement flags — k.shooting is never
+    // read here, so firing cannot stop or slow a run.
     let dx = 0
     let dy = 0
     if (p.id === 1) {
-      if (k.has('w') || (solo && k.has('arrowup'))) dy -= 1
-      if (k.has('s') || (solo && k.has('arrowdown'))) dy += 1
-      if (k.has('a') || (solo && k.has('arrowleft'))) dx -= 1
-      if (k.has('d') || (solo && k.has('arrowright'))) dx += 1
+      if (k.w || (solo && k.up)) dy -= 1
+      if (k.s || (solo && k.down)) dy += 1
+      if (k.a || (solo && k.left)) dx -= 1
+      if (k.d || (solo && k.right)) dx += 1
     } else {
-      if (k.has('arrowup')) dy -= 1
-      if (k.has('arrowdown')) dy += 1
-      if (k.has('arrowleft')) dx -= 1
-      if (k.has('arrowright')) dx += 1
+      if (k.up) dy -= 1
+      if (k.down) dy += 1
+      if (k.left) dx -= 1
+      if (k.right) dx += 1
     }
     if (dx || dy) {
       const len = Math.hypot(dx, dy)
@@ -709,7 +670,10 @@ export class Game {
     }
     const boosted = p.character.id === 'army-retiree' && p.abilityActive > 0
     const step = p.speed * (boosted ? OVERDRIVE_SPEED : 1) * dt
-    this.moveCircle(p, dx * step, dy * step)
+    p.vx = dx * step
+    p.vy = dy * step
+    this.moveCircle(p, p.vx, p.vy)
+    this.checkRunAndGun(p, k.shooting)
 
     if (p.auto) {
       const mark = this.nearestEnemyTo(p, 1200)
@@ -722,6 +686,8 @@ export class Game {
       this.mouseWorld.x = this.mouseScreen.x / this.zoom + this.camera.x
       this.mouseWorld.y = this.mouseScreen.y / this.zoom + this.camera.y
       p.angle = Math.atan2(this.mouseWorld.y - p.y, this.mouseWorld.x - p.x)
+      // Held mouse button keeps the trigger down; movement above already ran.
+      p.shooting = keysPressed.shooting
     }
     p.hurtCooldown = Math.max(0, p.hurtCooldown - dt)
 
@@ -733,6 +699,28 @@ export class Game {
         p.hp = Math.min(p.maxHp, p.hp + p.maxHp * c.regenFraction)
       }
     }
+  }
+
+  /**
+   * Self-check for the run-and-gun contract: while the trigger is held and a
+   * direction key is down, velocity must still be non-zero. Reports once.
+   */
+  private checkRunAndGun(p: Player, shooting: boolean) {
+    if (this.runAndGunChecked || !shooting || !this.movementRequested(p)) return
+    this.runAndGunChecked = true
+    const ok = p.vx !== 0 || p.vy !== 0
+    console[ok ? 'info' : 'error'](
+      `[input] shooting=true velocity=(${p.vx.toFixed(1)}, ${p.vy.toFixed(1)}) ${
+        ok ? 'OK — movement runs while firing' : 'FAIL — velocity cleared by shooting'
+      }`
+    )
+  }
+
+  private movementRequested(p: Player): boolean {
+    const k = keysPressed
+    if (p.id === 2) return k.up || k.down || k.left || k.right
+    const solo = this.players.length === 1
+    return k.w || k.a || k.s || k.d || (solo && (k.up || k.down || k.left || k.right))
   }
 
   private hasLineOfSight(from: { x: number; y: number }, to: { x: number; y: number }): boolean {
