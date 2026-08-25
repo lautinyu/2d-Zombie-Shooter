@@ -70,6 +70,14 @@ app.innerHTML = `
       </div>
     </div>
 
+    <div id="mutation-bar" class="absolute left-1/2 top-28 hidden w-[min(560px,80vw)] -translate-x-1/2 rounded-md bg-black/70 px-4 py-2 text-center ring-2 ring-lime-500/60">
+      <div id="mutation-title" class="text-sm font-black uppercase tracking-widest text-lime-300"></div>
+      <div id="mutation-blurb" class="mt-0.5 text-[11px] text-slate-300"></div>
+      <div class="mt-1 h-1.5 w-full overflow-hidden rounded bg-black/70">
+        <div id="mutation-fill" class="h-full w-full bg-lime-400"></div>
+      </div>
+    </div>
+
     <div id="hud-controls" class="absolute left-5 bottom-5 rounded-md bg-black/50 px-3 py-2 text-[11px] leading-relaxed text-slate-400">
       WASD / Arrows to move · Mouse to aim · Left click to shoot · R to reload
     </div>
@@ -766,6 +774,10 @@ const bossBar = el('boss-bar')
 const bossName = el('boss-name')
 const bossPhase = el('boss-phase')
 const bossFill = el('boss-fill')
+const mutationBar = el('mutation-bar')
+const mutationTitle = el('mutation-title')
+const mutationBlurb = el('mutation-blurb')
+const mutationFill = el('mutation-fill')
 const hudWeapon = el('hud-weapon')
 const hudPerk = el('hud-perk')
 const hudScrap = el('hud-scrap')
@@ -887,6 +899,16 @@ game.onHud = (h: Hud) => {
   missionZone.textContent = h.mapName
   objectiveText.textContent = h.objective
   currentZone.textContent = h.mapName
+
+  mutationBar.classList.toggle('hidden', !h.mutation)
+  if (h.mutation) {
+    mutationTitle.textContent = h.mutation.alert
+      ? `ALERT: Virus Mutating! — ${h.mutation.name}`
+      : h.mutation.name
+    mutationBlurb.textContent = `${h.mutation.blurb} · ${Math.ceil(h.mutation.time)}s left`
+    mutationFill.style.width = `${(h.mutation.time / 20) * 100}%`
+    mutationBar.classList.toggle('animate-pulse', h.mutation.alert)
+  }
 
   bossBar.classList.toggle('hidden', !h.boss)
   if (h.boss) {

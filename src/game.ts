@@ -53,7 +53,7 @@ interface Player {
   barricadeCharges: number
 }
 
-export type EnemyKind = 'zombie' | 'bug'
+export type EnemyKind = 'zombie' | 'bug' | 'runner' | 'camo'
 
 interface Enemy {
   kind: EnemyKind
@@ -71,6 +71,27 @@ interface Enemy {
   vision: number
   aware: boolean
   driftAngle: number
+  /** Camo zombies drop their disguise once they close in, and stay revealed. */
+  revealed: boolean
+}
+
+/** Acid left by enemies killed under the Toxic Blood mutation. */
+interface AcidPool {
+  x: number
+  y: number
+  r: number
+  life: number
+  maxLife: number
+}
+
+export type MutationId = 'hyper-speed' | 'hardened' | 'toxic-blood'
+
+interface Mutation {
+  id: MutationId
+  name: string
+  blurb: string
+  /** Seconds of effect left. */
+  time: number
 }
 
 interface Survivor {
@@ -212,9 +233,19 @@ export interface HudBoss {
   phase: 1 | 2
 }
 
+export interface HudMutation {
+  name: string
+  blurb: string
+  /** Seconds of effect left. */
+  time: number
+  /** True during the short "Virus Mutating!" alert. */
+  alert: boolean
+}
+
 export interface Hud {
   players: HudPlayer[]
   boss: HudBoss | null
+  mutation: HudMutation | null
   kills: number
   target: number
   missionName: string
@@ -250,6 +281,34 @@ const BURN_SLOW = 0.45
 const ACID_SHOT_INTERVAL = 5
 const IGNITE_CHANCE = 0.3
 const BUG_SPAWN_CHANCE = 0.2
+/** Share of the non-bug spawns that come out as each zombie variant. */
+const RUNNER_SPAWN_CHANCE = 0.24
+const CAMO_SPAWN_CHANCE = 0.16
+/** Runners: twice the pace of a normal zombie on 40% of its health. */
+const RUNNER_SPEED = 2
+const RUNNER_HP_FRACTION = 0.4
+/** How close a camo zombie gets before it drops the disguise. */
+const CAMO_REVEAL_RANGE = 130
+/** Distance at which a camo zombie starts mimicking a nearby survivor. */
+const CAMO_MIMIC_RANGE = 260
+const MUTATION_INTERVAL = 45
+const MUTATION_DURATION = 20
+const MUTATION_ALERT_TIME = 4
+const MUTATION_SPEED = 1.25
+const MUTATION_ARMOUR = 0.7
+const ACID_LIFE = 7
+const ACID_RADIUS = 34
+const ACID_DPS = 16
+
+const MUTATIONS: Omit<Mutation, 'time'>[] = [
+  { id: 'hyper-speed', name: 'Hyper-Speed Mutation', blurb: 'All infected move 25% faster.' },
+  { id: 'hardened', name: 'Hardened Shell Mutation', blurb: 'Infected take 30% less bullet damage.' },
+  {
+    id: 'toxic-blood',
+    name: 'Toxic Blood Mutation',
+    blurb: 'Kills leave acid puddles that burn you.',
+  },
+]
 const HIVE_BUG_SPAWN_CHANCE = 0.45
 const EXTRACTION_RADIUS = 70
 const SURVIVOR_SPEED = 54
@@ -321,6 +380,11 @@ export class Game {
   /** Route field to the nearest player or survivor, rebuilt periodically. */
   private chaseField: FlowField | null = null
   private chaseTimer = 0
+  private acid: AcidPool[] = []
+  private mutation: Mutation | null = null
+  private mutationTimer = MUTATION_INTERVAL
+  /** Seconds left on the "Virus Mutating!" HUD alert. */
+  private mutationAlert = 0
 
   private spawnTimer = 0
   private spawned = 0
@@ -472,6 +536,10 @@ export class Game {
     this.groanTimer = 2
     this.chaseField = null
     this.chaseTimer = 0
+    this.acid = []
+    this.mutation = null
+    this.mutationTimer = MUTATION_INTERVAL
+    this.mutationAlert = 0
     this.zoom = 1
     this.runAndGunChecked = false
 
@@ -614,6 +682,15 @@ export class Game {
           barricades: p.barricadeCharges,
         },
       })),
+      mutation:
+        this.mutation && (this.mutationAlert > 0 || this.mutation.time > 0)
+          ? {
+              name: this.mutation.name,
+              blurb: this.mutation.blurb,
+              time: Math.max(0, this.mutation.time),
+              alert: this.mutationAlert > 0,
+            }
+          : null,
       boss: this.boss
         ? {
             name: BOSS_NAME,
@@ -655,10 +732,54 @@ export class Game {
     this.updateTurrets(dt)
     this.updateEnemies(dt)
     this.updatePickups(dt)
+    this.updateAcid(dt)
+    this.updateMutation(dt)
     this.updateSpawning(dt)
     this.updateCamera()
     this.updateAmbience(dt)
     this.checkOutcome()
+  }
+
+  /** Rolls a fresh global enemy modifier every MUTATION_INTERVAL seconds. */
+  private updateMutation(dt: number) {
+    this.mutationAlert = Math.max(0, this.mutationAlert - dt)
+    if (this.mutation) {
+      this.mutation.time -= dt
+      if (this.mutation.time <= 0) this.mutation = null
+    }
+    this.mutationTimer -= dt
+    if (this.mutationTimer > 0) return
+    this.mutationTimer = MUTATION_INTERVAL
+    const rolled = MUTATIONS[Math.floor(Math.random() * MUTATIONS.length)]
+    this.mutation = { ...rolled, time: MUTATION_DURATION }
+    this.mutationAlert = MUTATION_ALERT_TIME
+    playSfx('sting')
+  }
+
+  private get mutationSpeed(): number {
+    return this.mutation?.id === 'hyper-speed' ? MUTATION_SPEED : 1
+  }
+
+  private get mutationArmour(): number {
+    return this.mutation?.id === 'hardened' ? MUTATION_ARMOUR : 1
+  }
+
+  /** Toxic Blood puddles: hurt players who stand in them, then fade. */
+  private updateAcid(dt: number) {
+    for (let i = this.acid.length - 1; i >= 0; i--) {
+      const pool = this.acid[i]
+      pool.life -= dt
+      if (pool.life <= 0) {
+        this.acid.splice(i, 1)
+        continue
+      }
+      for (const p of this.alivePlayers) {
+        if (Math.hypot(p.x - pool.x, p.y - pool.y) > pool.r + p.r) continue
+        p.hp -= ACID_DPS * dt
+        p.hurtCooldown = 0.25
+        p.safeTimer = 0
+      }
+    }
   }
 
   /** Occasional groans from the horde while enemies are around. */
@@ -1068,7 +1189,7 @@ export class Game {
           if (Math.hypot(e.x - b.x, e.y - b.y) >= e.r + 2) continue
           b.hit.add(e)
           const travelled = 1 - b.life / b.maxLife
-          e.hp -= b.damage * (1 - (1 - b.falloff) * travelled)
+          e.hp -= b.damage * (1 - (1 - b.falloff) * travelled) * this.mutationArmour
           if (b.poison) e.poison = POISON_DURATION
           if (b.ignite && e.kind === 'bug' && Math.random() < IGNITE_CHANCE) e.burn = BURN_DURATION
           if (e.hp <= 0) this.killEnemy(j)
@@ -1087,6 +1208,9 @@ export class Game {
     this.enemies.splice(index, 1)
     this.kills += 1
     this.scrapEarned += z.kind === 'bug' ? SCRAP_PER_BUG : SCRAP_PER_KILL
+    if (this.mutation?.id === 'toxic-blood') {
+      this.acid.push({ x: z.x, y: z.y, r: ACID_RADIUS, life: ACID_LIFE, maxLife: ACID_LIFE })
+    }
     if (Math.random() < 0.22) {
       this.ammoBoxes.push({ x: z.x, y: z.y, amount: 20 })
     }
@@ -1334,13 +1458,20 @@ export class Game {
         this.killEnemy(i)
         continue
       }
-      z.speed = z.burn > 0 ? z.baseSpeed * BURN_SLOW : z.baseSpeed
+      z.speed = (z.burn > 0 ? z.baseSpeed * BURN_SLOW : z.baseSpeed) * this.mutationSpeed
 
       const target = this.targetFor(z)
       if (!target.survivor && !target.player) continue
       const dx = target.x - z.x
       const dy = target.y - z.y
       const d = Math.hypot(dx, dy) || 1
+      // A camo zombie keeps its disguise until a player is within striking range.
+      if (z.kind === 'camo' && !z.revealed) {
+        const hunter = this.nearestPlayerTo(z)
+        if (hunter && Math.hypot(hunter.x - z.x, hunter.y - z.y) < CAMO_REVEAL_RANGE) {
+          z.revealed = true
+        }
+      }
       const step = z.speed * dt
       const wob = Math.sin(z.wobble * 4) * 0.25
       z.retreat = Math.max(0, z.retreat - dt)
@@ -1460,8 +1591,62 @@ export class Game {
     const spot = this.spawnPoint()
     if (!spot) return
     const bugChance = mission.type === 'hive' ? HIVE_BUG_SPAWN_CHANCE : BUG_SPAWN_CHANCE
-    this.enemies.push(Math.random() < bugChance ? this.makeBug(spot) : this.makeZombie(spot))
+    this.enemies.push(this.makeEnemy(spot, bugChance))
     this.spawned += 1
+  }
+
+  /** Waves mix normal zombies with bugs, runners and camo stalkers. */
+  private makeEnemy(spot: { x: number; y: number }, bugChance: number): Enemy {
+    const roll = Math.random()
+    if (roll < bugChance) return this.makeBug(spot)
+    const variant = Math.random()
+    if (variant < RUNNER_SPAWN_CHANCE) return this.makeRunner(spot)
+    if (variant < RUNNER_SPAWN_CHANCE + CAMO_SPAWN_CHANCE) return this.makeCamo(spot)
+    return this.makeZombie(spot)
+  }
+
+  /** The Runner: twice the speed of a zombie, 40% of its health. */
+  private makeRunner(spot: { x: number; y: number }): Enemy {
+    return {
+      kind: 'runner',
+      x: spot.x,
+      y: spot.y,
+      r: 11,
+      hp: 60 * RUNNER_HP_FRACTION,
+      speed: 0,
+      baseSpeed: RUNNER_SPEED * (95 + Math.random() * 30),
+      attackCooldown: 0,
+      wobble: Math.random() * 10,
+      retreat: 0,
+      poison: 0,
+      burn: 0,
+      vision: ZOMBIE_VISION,
+      aware: false,
+      driftAngle: Math.random() * Math.PI * 2,
+      revealed: false,
+    }
+  }
+
+  /** The Camo Zombie: blends into the floor and mimics survivors. */
+  private makeCamo(spot: { x: number; y: number }): Enemy {
+    return {
+      kind: 'camo',
+      x: spot.x,
+      y: spot.y,
+      r: 14,
+      hp: 70,
+      speed: 0,
+      baseSpeed: 88 + Math.random() * 26,
+      attackCooldown: 0,
+      wobble: Math.random() * 10,
+      retreat: 0,
+      poison: 0,
+      burn: 0,
+      vision: ZOMBIE_VISION,
+      aware: false,
+      driftAngle: Math.random() * Math.PI * 2,
+      revealed: false,
+    }
   }
 
   private makeZombie(spot: { x: number; y: number }): Enemy {
@@ -1482,6 +1667,7 @@ export class Game {
       vision: ZOMBIE_VISION,
       aware: false,
       driftAngle: Math.random() * Math.PI * 2,
+      revealed: false,
     }
   }
 
@@ -1502,6 +1688,7 @@ export class Game {
       vision: BUG_VISION,
       aware: false,
       driftAngle: Math.random() * Math.PI * 2,
+      revealed: false,
     }
   }
 
@@ -1536,6 +1723,9 @@ export class Game {
     const fit = Math.min(this.viewW / spanX, this.viewH / spanY, 1)
     const target = clamp(fit, MIN_ZOOM, 1)
     this.zoom += (target - this.zoom) * 0.08
+    // Settle exactly on the target: an endlessly creeping zoom resamples every
+    // texture line each frame, which reads as flickering while walking.
+    if (Math.abs(target - this.zoom) < 0.002) this.zoom = target
 
     const worldW = this.viewW / this.zoom
     const worldH = this.viewH / this.zoom
@@ -1549,8 +1739,7 @@ export class Game {
     ctx.fillStyle = '#0b0f0d'
     ctx.fillRect(0, 0, this.viewW, this.viewH)
     ctx.save()
-    ctx.scale(this.zoom, this.zoom)
-    ctx.translate(-this.camera.x, -this.camera.y)
+    this.applyWorldTransform()
 
     ctx.fillStyle = m.color
     ctx.fillRect(0, 0, m.width, m.height)
@@ -1578,9 +1767,13 @@ export class Game {
     if (this.mission?.type === 'protect') this.drawSurvivorHealthBars()
     for (const t of this.turrets) this.drawTurret(t)
 
+    for (const pool of this.acid) this.drawAcid(pool)
+
     for (const e of this.enemies) {
-      this.drawGroundShadow(e.x, e.y, e.r)
+      if (e.kind !== 'camo' || e.revealed) this.drawGroundShadow(e.x, e.y, e.r)
       if (e.kind === 'bug') this.drawBug(e)
+      else if (e.kind === 'camo') this.drawCamo(e)
+      else if (e.kind === 'runner') this.drawRunner(e)
       else this.drawZombie(e)
     }
 
@@ -1608,6 +1801,20 @@ export class Game {
 
     this.drawCrosshair()
     this.drawMinimap()
+  }
+
+  /**
+   * World transform for the camera, snapped to whole device pixels so floor
+   * seams and shadows do not shimmer between frames while the player walks.
+   */
+  private applyWorldTransform() {
+    const ctx = this.ctx
+    const dpr = window.devicePixelRatio || 1
+    const unit = this.zoom * dpr
+    const cx = Math.round(this.camera.x * unit) / unit
+    const cy = Math.round(this.camera.y * unit) / unit
+    ctx.scale(this.zoom, this.zoom)
+    ctx.translate(-cx, -cy)
   }
 
   /** Floor texture: asphalt seams, warehouse planks, hive veins, camp dirt. */
@@ -1744,8 +1951,9 @@ export class Game {
   }
 
   /**
-   * Enhanced pack: extrude the footprint away from the camera centre so the
-   * building shows a lit top face and shaded sides, like a block.
+   * Enhanced pack: extrude the footprint away from the map centre so the
+   * building shows a lit top face and shaded sides, like a block. The centre is
+   * fixed rather than camera-based, so blocks never shift while walking.
    */
   private drawStructure3D(w: Rect) {
     const ctx = this.ctx
@@ -1754,8 +1962,8 @@ export class Game {
       this.drawStructure(w)
       return
     }
-    const cx = this.camera.x + this.viewW / (2 * this.zoom)
-    const cy = this.camera.y + this.viewH / (2 * this.zoom)
+    const cx = m.width / 2
+    const cy = m.height / 2
     // Slide the roof away from the view centre by a small, clamped amount: a
     // proportional extrusion detaches distant blocks and reads as platforms.
     const dx = w.x + w.w / 2 - cx
@@ -2085,6 +2293,106 @@ export class Game {
     ctx.stroke()
   }
 
+  /** Toxic Blood residue: a bubbling green puddle that fades out. */
+  private drawAcid(pool: AcidPool) {
+    const ctx = this.ctx
+    const fade = Math.min(1, pool.life / pool.maxLife + 0.2)
+    ctx.save()
+    ctx.globalAlpha = 0.55 * fade
+    ctx.beginPath()
+    ctx.arc(pool.x, pool.y, pool.r, 0, Math.PI * 2)
+    ctx.fillStyle = '#65a30d'
+    ctx.fill()
+    ctx.globalAlpha = 0.85 * fade
+    ctx.strokeStyle = '#a3e635'
+    ctx.lineWidth = 2
+    ctx.stroke()
+    ctx.globalAlpha = 0.5 * fade
+    ctx.fillStyle = '#bef264'
+    for (let i = 0; i < 5; i++) {
+      const a = (i / 5) * Math.PI * 2 + pool.life
+      ctx.beginPath()
+      ctx.arc(pool.x + Math.cos(a) * pool.r * 0.45, pool.y + Math.sin(a) * pool.r * 0.45, 4, 0, Math.PI * 2)
+      ctx.fill()
+    }
+    ctx.restore()
+  }
+
+  /** The Runner: small, bright red, with motion streaks behind it. */
+  private drawRunner(z: Enemy) {
+    const ctx = this.ctx
+    this.drawStatusRing(z)
+    const y = this.textures === 'enhanced' ? z.y - UNIT_LIFT : z.y
+    ctx.save()
+    ctx.strokeStyle = 'rgba(255,60,60,0.35)'
+    ctx.lineWidth = 3
+    for (let i = 1; i <= 2; i++) {
+      ctx.beginPath()
+      ctx.arc(z.x - Math.cos(z.driftAngle) * 0, y, z.r + i * 4, 0, Math.PI * 2)
+      ctx.stroke()
+    }
+    ctx.beginPath()
+    ctx.arc(z.x, y, z.r, 0, Math.PI * 2)
+    ctx.fillStyle = '#ff1e1e'
+    ctx.fill()
+    ctx.strokeStyle = '#7f1d1d'
+    ctx.lineWidth = 2
+    ctx.stroke()
+    ctx.restore()
+  }
+
+  /**
+   * The Camo Zombie: tinted to the floor until it closes in, and disguised as
+   * a survivor whenever one is nearby.
+   */
+  private drawCamo(z: Enemy) {
+    const ctx = this.ctx
+    const y = this.textures === 'enhanced' ? z.y - UNIT_LIFT : z.y
+    if (z.revealed) {
+      this.drawStatusRing(z)
+      ctx.beginPath()
+      ctx.arc(z.x, y, z.r, 0, Math.PI * 2)
+      ctx.fillStyle = '#3f6212'
+      ctx.fill()
+      ctx.strokeStyle = '#d62828'
+      ctx.lineWidth = 3
+      ctx.stroke()
+      return
+    }
+
+    const mimic = this.survivors.some(
+      (s) => !s.safe && s.hp > 0 && Math.hypot(s.x - z.x, s.y - z.y) < CAMO_MIMIC_RANGE
+    )
+    if (mimic) {
+      // Wears a survivor's look — including a fake health bar — as a decoy.
+      ctx.beginPath()
+      ctx.arc(z.x, y, z.r, 0, Math.PI * 2)
+      ctx.fillStyle = '#e2e8f0'
+      ctx.fill()
+      ctx.strokeStyle = '#0f172a'
+      ctx.lineWidth = 2
+      ctx.stroke()
+      ctx.fillStyle = 'rgba(0,0,0,0.6)'
+      ctx.fillRect(z.x - 21, y - z.r - 15, 42, 8)
+      ctx.fillStyle = '#22c55e'
+      ctx.fillRect(z.x - 20, y - z.r - 14, 40, 6)
+      return
+    }
+
+    // Otherwise it takes on the floor colour, leaving only a faint outline.
+    ctx.save()
+    ctx.globalAlpha = 0.9
+    ctx.beginPath()
+    ctx.arc(z.x, y, z.r, 0, Math.PI * 2)
+    ctx.fillStyle = this.map.color
+    ctx.fill()
+    ctx.globalAlpha = 0.18
+    ctx.strokeStyle = '#0f172a'
+    ctx.lineWidth = 2
+    ctx.stroke()
+    ctx.restore()
+  }
+
   private drawBug(b: Enemy) {
     const ctx = this.ctx
     this.drawStatusRing(b)
@@ -2175,8 +2483,7 @@ export class Game {
       // Show where player 2's auto-aim is pointing.
       const len = 70
       ctx.save()
-      ctx.scale(this.zoom, this.zoom)
-      ctx.translate(-this.camera.x, -this.camera.y)
+      this.applyWorldTransform()
       ctx.strokeStyle = 'rgba(96,165,250,0.55)'
       ctx.lineWidth = 2
       ctx.setLineDash([8, 8])
@@ -2245,9 +2552,11 @@ export class Game {
     }
 
     for (const e of this.enemies) {
-      ctx.fillStyle = e.kind === 'bug' ? '#ffa41b' : '#d62828'
+      // Camo stalkers stay off the radar until they break cover.
+      if (e.kind === 'camo' && !e.revealed) continue
+      ctx.fillStyle = e.kind === 'bug' ? '#ffa41b' : e.kind === 'runner' ? '#ff1e1e' : '#d62828'
       ctx.beginPath()
-      ctx.arc(mx + e.x * s, my + e.y * s, e.kind === 'bug' ? 2 : 2.5, 0, Math.PI * 2)
+      ctx.arc(mx + e.x * s, my + e.y * s, e.kind === 'zombie' ? 2.5 : 2, 0, Math.PI * 2)
       ctx.fill()
     }
 
