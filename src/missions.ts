@@ -1,7 +1,7 @@
 import type { MapId } from './maps'
 import { mapById } from './maps'
 
-export type MissionType = 'hunt' | 'hive' | 'protect'
+export type MissionType = 'hunt' | 'hive' | 'protect' | 'boss'
 export type PathId = 'combat' | 'rescue'
 
 export interface Mission {
@@ -21,6 +21,8 @@ export interface Mission {
   unlocks: string[]
   /** Payout multiplier — branch missions pay noticeably better. */
   payout: number
+  /** The finale only opens once both campaign branches are finished. */
+  requiresAllPaths?: boolean
 }
 
 export const MISSIONS: Mission[] = [
@@ -93,6 +95,22 @@ export const MISSIONS: Mission[] = [
     unlocks: [],
     payout: 1.8,
   },
+
+  // Finale — opens once both branches are cleared
+  {
+    id: 'finale',
+    name: 'The Hive Mother',
+    map: 'hive',
+    type: 'boss',
+    target: 1,
+    survivors: 0,
+    description: 'The Mutated Alpha Bug that seeded the plague is awake at the bottom of the hive.',
+    objective: 'Kill the Hive Mother. She rings the chamber with venom and calls her brood.',
+    path: null,
+    unlocks: [],
+    payout: 3,
+    requiresAllPaths: true,
+  },
 ]
 
 export function missionById(id: string): Mission {
@@ -122,6 +140,9 @@ export function missionUnlocked(
   completed: string[],
   path: PathId | null
 ): boolean {
+  if (m.requiresAllPaths) {
+    return pathComplete('combat', completed) && pathComplete('rescue', completed)
+  }
   const prereqs = MISSIONS.filter((other) => other.unlocks.includes(m.id))
   if (prereqs.length && !prereqs.some((p) => completed.includes(p.id))) return false
   if (m.path && path && m.path !== path && !pathComplete(path, completed)) return false

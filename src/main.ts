@@ -9,6 +9,9 @@ import type { Weapon, WeaponId } from './weapons'
 import { loadProfile, missionReward, saveProfile } from './profile'
 import { CHARACTERS, characterById } from './characters'
 import type { CharacterId } from './characters'
+import { TEXTURE_PACKS } from './theme'
+import type { TexturePack } from './theme'
+import { playMusic, resumeAudio, stopMusic } from './audio'
 
 const app = document.querySelector<HTMLDivElement>('#app')
 if (!app) throw new Error('#app container missing')
@@ -50,8 +53,28 @@ app.innerHTML = `
       <span id="current-zone">The Streets</span>
     </div>
 
+    <div id="boss-bar" class="absolute left-1/2 top-16 hidden w-[min(760px,80vw)] -translate-x-1/2">
+      <div class="flex items-baseline justify-between text-xs font-black uppercase tracking-widest">
+        <span id="boss-name" class="text-orange-300">The Hive Mother</span>
+        <span id="boss-phase" class="text-slate-300"></span>
+      </div>
+      <div class="mt-1 h-5 w-full overflow-hidden rounded-md bg-black/70 ring-2 ring-orange-500/60">
+        <div id="boss-fill" class="h-full w-full bg-gradient-to-r from-orange-500 to-red-600"></div>
+      </div>
+    </div>
+
     <div id="hud-controls" class="absolute left-5 bottom-5 rounded-md bg-black/50 px-3 py-2 text-[11px] leading-relaxed text-slate-400">
       WASD / Arrows to move · Mouse to aim · Left click to shoot · R to reload
+    </div>
+  </div>
+
+  <!-- Intro splash -->
+  <div id="intro" class="absolute inset-0 z-30 hidden items-center justify-center bg-slate-950 p-6">
+    <div class="w-full max-w-3xl text-center">
+      <h1 class="text-5xl font-black tracking-tight text-emerald-400 drop-shadow">ZOMBIE SHOOTER</h1>
+      <p class="mt-3 text-sm text-slate-400">Pick a texture pack. Physics, movement and combat are identical &mdash; only the art changes.</p>
+      <div id="intro-packs" class="mt-8 grid gap-4 md:grid-cols-2"></div>
+      <p class="mt-6 text-xs text-slate-500">You can switch packs any time from the main menu.</p>
     </div>
   </div>
 
@@ -65,6 +88,7 @@ app.innerHTML = `
         <button id="lore-btn" class="rounded-lg bg-orange-500/15 px-6 py-2 text-sm font-bold text-orange-300 ring-1 ring-orange-400/40 hover:bg-orange-500/25">Lore / Story</button>
         <button id="shop-btn" class="rounded-lg bg-yellow-500/15 px-6 py-2 text-sm font-bold text-yellow-300 ring-1 ring-yellow-400/40 hover:bg-yellow-500/25">Weapons Shop</button>
         <button id="locker-btn" class="rounded-lg bg-sky-500/15 px-6 py-2 text-sm font-bold text-sky-300 ring-1 ring-sky-400/40 hover:bg-sky-500/25">Locker</button>
+        <button id="textures-btn" class="rounded-lg bg-violet-500/15 px-6 py-2 text-sm font-bold text-violet-300 ring-1 ring-violet-400/40 hover:bg-violet-500/25">Texture Pack</button>
       </div>
       <div class="mt-4 flex items-center justify-center gap-2 text-xs">
         <span class="font-semibold uppercase tracking-wider text-slate-400">Players</span>
@@ -182,6 +206,7 @@ const loseScreen = el('lose')
 const loreScreen = el('lore')
 const arsenalScreen = el('arsenal')
 const characterScreen = el('characters')
+const introScreen = el('intro')
 
 const game = new Game(canvas)
 const profile = loadProfile()
@@ -210,7 +235,9 @@ function missionCard(m: Mission): HTMLElement {
   const badge =
     m.type === 'protect'
       ? `<span class="rounded-md bg-sky-500/15 px-2 py-0.5 text-[11px] font-semibold text-sky-300">Protect ${m.survivors}</span>`
-      : `<span class="rounded-md bg-red-500/15 px-2 py-0.5 text-[11px] font-semibold text-red-300">${m.target} kills</span>`
+      : m.type === 'boss'
+        ? '<span class="rounded-md bg-orange-500/20 px-2 py-0.5 text-[11px] font-semibold text-orange-300">Boss · 2 phases</span>'
+        : `<span class="rounded-md bg-red-500/15 px-2 py-0.5 text-[11px] font-semibold text-red-300">${m.target} kills</span>`
   card.innerHTML = `
     <div class="flex items-center justify-between">
       <span class="text-[11px] font-semibold uppercase tracking-wider text-emerald-400">${missionMapName(m)}</span>
@@ -291,7 +318,115 @@ function renderCampaign() {
     branchColumn('rescue', 'Path B · Rescue Focus', 'Escort survivors out alive — one death fails the run.')
   )
   campaignEl.appendChild(branches)
+
+  const finale = MISSIONS.find((m) => m.requiresAllPaths)
+  if (finale) {
+    const wrap = document.createElement('div')
+    wrap.className = `rounded-2xl p-4 ring-1 ${
+      unlocked(finale) ? 'bg-orange-500/5 ring-orange-400/40' : 'bg-white/5 ring-white/10'
+    }`
+    wrap.innerHTML =
+      '<h3 class="text-sm font-black uppercase tracking-wider text-orange-300">Finale · Boss Fight</h3><p class="mt-1 text-xs text-slate-400">Clear both branches to face the Mutated Alpha Bug that started the plague.</p>'
+    const holder = document.createElement('div')
+    holder.className = 'mt-3'
+    holder.appendChild(missionCard(finale))
+    wrap.appendChild(holder)
+    campaignEl.appendChild(wrap)
+  }
 }
+
+const introPacks = el('intro-packs')
+
+function renderIntro() {
+  introPacks.innerHTML = ''
+  for (const pack of TEXTURE_PACKS) {
+    const chosen = profile.textures === pack.id
+    const card = document.createElement('button')
+    card.className = `rounded-2xl p-6 text-left ring-1 transition ${
+      chosen ? 'bg-emerald-500/10 ring-emerald-400/70' : 'bg-white/5 ring-white/10 hover:bg-white/10'
+    }`
+    card.innerHTML = `
+      <div class="flex items-center justify-between">
+        <span class="text-xl font-bold text-white">${pack.name}</span>
+        ${chosen ? '<span class="text-xs font-bold text-emerald-300">CURRENT</span>' : ''}
+      </div>
+      <p class="mt-2 text-sm text-slate-400">${pack.blurb}</p>
+      <canvas width="320" height="140" class="mt-4 w-full rounded-lg bg-black/40" data-preview="${pack.id}"></canvas>
+    `
+    card.addEventListener('click', () => {
+      resumeAudio()
+      setTextures(pack.id)
+      show(introScreen, false)
+      if (profile.character) show(menu, true)
+      else show(characterScreen, true)
+      playMusic('menu')
+    })
+    introPacks.appendChild(card)
+    const preview = card.querySelector('canvas')
+    if (preview) drawPackPreview(preview, pack.id)
+  }
+}
+
+/** Tiny side-by-side sample of how the world is drawn in each pack. */
+function drawPackPreview(canvasEl: HTMLCanvasElement, pack: TexturePack) {
+  const ctx = canvasEl.getContext('2d')
+  if (!ctx) return
+  ctx.fillStyle = '#23262a'
+  ctx.fillRect(0, 0, 320, 140)
+
+  if (pack === 'enhanced') {
+    ctx.fillStyle = 'rgba(0,0,0,0.45)'
+    ctx.fillRect(60, 40, 90, 60)
+    ctx.fillStyle = '#8b5a2b'
+    ctx.beginPath()
+    ctx.moveTo(60, 100)
+    ctx.lineTo(150, 100)
+    ctx.lineTo(166, 116)
+    ctx.lineTo(70, 116)
+    ctx.closePath()
+    ctx.fill()
+    ctx.fillStyle = '#a5703a'
+    ctx.fillRect(70, 34, 96, 66)
+    ctx.fillStyle = 'rgba(255,212,121,0.5)'
+    ctx.fillRect(84, 48, 20, 22)
+    ctx.fillRect(120, 48, 20, 22)
+    ctx.fillStyle = 'rgba(0,0,0,0.4)'
+    ctx.beginPath()
+    ctx.ellipse(240, 96, 20, 9, 0, 0, Math.PI * 2)
+    ctx.fill()
+    const grad = ctx.createRadialGradient(232, 74, 4, 240, 84, 20)
+    grad.addColorStop(0, '#7ef7a5')
+    grad.addColorStop(1, '#12894a')
+    ctx.fillStyle = grad
+    ctx.beginPath()
+    ctx.arc(240, 84, 20, 0, Math.PI * 2)
+    ctx.fill()
+  } else {
+    ctx.fillStyle = '#8b5a2b'
+    ctx.fillRect(60, 40, 96, 66)
+    ctx.strokeStyle = '#5c3a1c'
+    ctx.lineWidth = 3
+    ctx.strokeRect(60, 40, 96, 66)
+    ctx.fillStyle = '#3ddc84'
+    ctx.beginPath()
+    ctx.arc(240, 84, 20, 0, Math.PI * 2)
+    ctx.fill()
+    ctx.strokeStyle = '#0f172a'
+    ctx.stroke()
+  }
+}
+
+function setTextures(pack: TexturePack) {
+  profile.textures = pack
+  game.textures = pack
+  persist()
+}
+
+el('textures-btn').addEventListener('click', () => {
+  renderIntro()
+  show(menu, false)
+  show(introScreen, true)
+})
 
 function launch(m: Mission) {
   currentMission = m
@@ -555,6 +690,9 @@ game.onStateChange = (state: GameState) => {
     show(characterScreen, false)
   }
   canvas.classList.toggle('cursor-none', state === 'playing')
+  if (state === 'menu') playMusic('menu')
+  if (state === 'won') playMusic('victory')
+  if (state === 'lost') playMusic('gameover')
   if (state === 'won') {
     if (!profile.completed.includes(currentMission.id)) profile.completed.push(currentMission.id)
   }
@@ -572,7 +710,9 @@ game.onStateChange = (state: GameState) => {
   if (state === 'won') {
     const where = missionMapName(currentMission)
     el('win-sub').textContent =
-      currentMission.type === 'protect'
+      currentMission.type === 'boss'
+        ? `${currentMission.name} complete — the Mutated Alpha Bug is dead. The hive falls silent.`
+        : currentMission.type === 'protect'
         ? `${currentMission.name} complete — all ${currentMission.survivors} survivors extracted from ${where}.`
         : `${currentMission.name} complete — ${currentMission.target} zombies cleared in ${where}.`
     const nexts = currentMission.unlocks.filter((id) => !profile.completed.includes(id))
@@ -614,6 +754,10 @@ const objectiveText = el('objective-text')
 const survivorPanel = el('survivor-panel')
 const survivorList = el('survivor-list')
 const currentZone = el('current-zone')
+const bossBar = el('boss-bar')
+const bossName = el('boss-name')
+const bossPhase = el('boss-phase')
+const bossFill = el('boss-fill')
 const hudWeapon = el('hud-weapon')
 const hudPerk = el('hud-perk')
 const hudScrap = el('hud-scrap')
@@ -736,13 +880,28 @@ game.onHud = (h: Hud) => {
   objectiveText.textContent = h.objective
   currentZone.textContent = h.mapName
 
+  bossBar.classList.toggle('hidden', !h.boss)
+  if (h.boss) {
+    const pct = (h.boss.hp / h.boss.maxHp) * 100
+    bossName.textContent = `${h.boss.name} · Mutated Alpha Bug`
+    bossPhase.textContent = `Phase ${h.boss.phase}${h.boss.phase === 2 ? ' · ENRAGED' : ''} — ${h.boss.hp}/${h.boss.maxHp}`
+    bossFill.style.width = `${pct}%`
+    bossFill.className = `h-full ${
+      h.boss.phase === 2 ? 'bg-gradient-to-r from-red-500 to-rose-700 animate-pulse' : 'bg-gradient-to-r from-orange-500 to-red-600'
+    }`
+  }
+
   if (h.isProtect) {
     const total = h.survivors.length
     killText.textContent = `Extracted: ${h.extracted}/${total}`
     missionBar.style.width = `${total ? (h.extracted / total) * 100 : 0}%`
   } else {
-    killText.textContent = `Zombies Cleared: ${h.kills}/${h.target}`
-    missionBar.style.width = `${h.target ? (h.kills / h.target) * 100 : 0}%`
+    killText.textContent = h.boss
+      ? `Hive Mother: ${Math.round((h.boss.hp / h.boss.maxHp) * 100)}%`
+      : `Zombies Cleared: ${h.kills}/${h.target}`
+    missionBar.style.width = h.boss
+      ? `${100 - (h.boss.hp / h.boss.maxHp) * 100}%`
+      : `${h.target ? (h.kills / h.target) * 100 : 0}%`
   }
 
   survivorPanel.classList.toggle('hidden', !h.isProtect)
@@ -793,8 +952,14 @@ el('retry-btn').addEventListener('click', () => launch(currentMission))
 persist()
 renderDetail()
 renderCharacters()
+renderIntro()
+game.textures = profile.textures ?? 'classic'
 game.onStateChange('menu')
-if (!profile.character) {
+stopMusic()
+if (!profile.textures) {
+  show(menu, false)
+  show(introScreen, true)
+} else if (!profile.character) {
   show(menu, false)
   show(characterScreen, true)
 }

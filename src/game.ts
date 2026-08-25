@@ -4,7 +4,9 @@ import { weaponById } from './weapons'
 import type { Character } from './characters'
 import { characterById } from './characters'
 import { SCRAP_PER_BUG, SCRAP_PER_KILL } from './profile'
-import { playShot } from './audio'
+import { playMusic, playSfx, playShot } from './audio'
+import type { TexturePack } from './theme'
+import { BUILDING_HEIGHT, UNIT_LIFT } from './theme'
 import type { GameMap, Rect } from './maps'
 import { circleHitsWall, mapById } from './maps'
 import { extractionField, flowDirection } from './nav'
@@ -111,6 +113,37 @@ interface Barricade {
   maxHp: number
 }
 
+/** The Hive Mother: a two-phase alpha bug that ends the campaign. */
+interface Boss {
+  x: number
+  y: number
+  r: number
+  hp: number
+  maxHp: number
+  baseSpeed: number
+  phase: 1 | 2
+  wobble: number
+  angle: number
+  ringTimer: number
+  broodTimer: number
+  dashTimer: number
+  /** Seconds left of the phase-2 charge; movement is locked to dashDir. */
+  dashing: number
+  dashDir: { x: number; y: number }
+  hurt: number
+  attackCooldown: number
+}
+
+/** Venom spat by the boss; a hit counts as a sting. */
+interface Projectile {
+  x: number
+  y: number
+  vx: number
+  vy: number
+  r: number
+  life: number
+}
+
 interface Bullet {
   x: number
   y: number
@@ -171,8 +204,16 @@ export interface HudPlayer {
   ability: HudAbility
 }
 
+export interface HudBoss {
+  name: string
+  hp: number
+  maxHp: number
+  phase: 1 | 2
+}
+
 export interface Hud {
   players: HudPlayer[]
+  boss: HudBoss | null
   kills: number
   target: number
   missionName: string
@@ -229,6 +270,21 @@ const MEDKIT_ARM_TIME = 0.8
 const BARRICADE_HP = 260
 const BARRICADE_W = 130
 const BARRICADE_H = 26
+const BOSS_NAME = 'The Hive Mother'
+const BOSS_MAX_HP = 2600
+const BOSS_RADIUS = 62
+const BOSS_SPEED = 62
+const BOSS_ENRAGE_SPEED = 1.3
+const BOSS_RING_INTERVAL = 3.4
+const BOSS_RING_SHOTS = 14
+const BOSS_BROOD_INTERVAL = 6
+const BOSS_BROOD_MAX = 8
+const BOSS_DASH_INTERVAL = 8
+const BOSS_DASH_TIME = 0.75
+const BOSS_DASH_SPEED = 640
+const BOSS_CONTACT_DAMAGE = 22
+const VENOM_SPEED = 210
+const VENOM_LIFE = 4.5
 
 export class Game {
   private ctx: CanvasRenderingContext2D
@@ -243,6 +299,8 @@ export class Game {
   weapon: Weapon = weaponById('rusty-pistol')
   character: Character = characterById('nature-lover')
   map: GameMap = mapById('streets')
+  /** Chosen on the intro splash; affects drawing only, never physics. */
+  textures: TexturePack = 'classic'
 
   private players: Player[] = []
   private enemies: Enemy[] = []
@@ -251,6 +309,9 @@ export class Game {
   private survivors: Survivor[] = []
   private turrets: Turret[] = []
   private medkits: Medkit[] = []
+  private boss: Boss | null = null
+  private venom: Projectile[] = []
+  private groanTimer = 2
   private barricades: Barricade[] = []
 
   private spawnTimer = 0
@@ -384,6 +445,9 @@ export class Game {
     this.turrets = []
     this.medkits = []
     this.barricades = []
+    this.venom = []
+    this.boss = null
+    this.groanTimer = 2
     this.zoom = 1
     this.runAndGunChecked = false
 
@@ -419,6 +483,30 @@ export class Game {
       })
     }
 
+    if (mission.type === 'boss') {
+      const spot = this.openSpot(BOSS_RADIUS + 12, this.p1, 700, 1200)
+      this.boss = {
+        x: spot.x,
+        y: spot.y,
+        r: BOSS_RADIUS,
+        hp: BOSS_MAX_HP,
+        maxHp: BOSS_MAX_HP,
+        baseSpeed: BOSS_SPEED,
+        phase: 1,
+        wobble: 0,
+        angle: 0,
+        ringTimer: 2,
+        broodTimer: 3,
+        dashTimer: BOSS_DASH_INTERVAL,
+        dashing: 0,
+        dashDir: { x: 1, y: 0 },
+        hurt: 0,
+        attackCooldown: 0,
+      }
+      playSfx('boss-roar')
+    }
+
+    playMusic(mission.type === 'boss' ? 'boss' : 'battle')
     this.setState('playing')
     this.start()
   }
@@ -500,6 +588,14 @@ export class Game {
           barricades: p.barricadeCharges,
         },
       })),
+      boss: this.boss
+        ? {
+            name: BOSS_NAME,
+            hp: Math.max(0, Math.round(this.boss.hp)),
+            maxHp: this.boss.maxHp,
+            phase: this.boss.phase,
+          }
+        : null,
       kills: this.kills,
       target: mission?.target ?? 0,
       missionName: mission?.name ?? '',
@@ -527,13 +623,25 @@ export class Game {
       this.updateWeapon(p, dt)
     }
     this.updateBullets(dt)
+    this.updateBoss(dt)
+    this.updateVenom(dt)
     this.updateSurvivors(dt)
     this.updateTurrets(dt)
     this.updateEnemies(dt)
     this.updatePickups(dt)
     this.updateSpawning(dt)
     this.updateCamera()
+    this.updateAmbience(dt)
     this.checkOutcome()
+  }
+
+  /** Occasional groans from the horde while enemies are around. */
+  private updateAmbience(dt: number) {
+    if (!this.enemies.length) return
+    this.groanTimer -= dt
+    if (this.groanTimer > 0) return
+    this.groanTimer = 3 + Math.random() * 4
+    playSfx('groan')
   }
 
   private checkOutcome() {
@@ -547,6 +655,12 @@ export class Game {
         return
       }
       if (this.survivors.length && this.survivors.every((s) => s.safe)) {
+        this.finish('won')
+        return
+      }
+    } else if (mission.type === 'boss') {
+      if (this.boss && this.boss.hp <= 0) {
+        this.boss = null
         this.finish('won')
         return
       }
@@ -589,11 +703,16 @@ export class Game {
 
     switch (p.character.id) {
       case 'army-retiree':
+        p.abilityActive = ability.duration
+        playSfx('overdrive')
+        break
       case 'nature-lover':
         p.abilityActive = ability.duration
+        playSfx('cloak')
         break
       case 'medic':
         this.medkits.push({ x: p.x, y: p.y, arm: MEDKIT_ARM_TIME })
+        playSfx('medkit')
         break
       case 'engineer': {
         // One turret runs at a time, twice per mission.
@@ -601,6 +720,7 @@ export class Game {
         const spot = circleHitsWall(this.map, p.x, p.y, 14) ? null : { x: p.x, y: p.y }
         if (!spot) return
         this.turrets.push({ x: spot.x, y: spot.y, r: 14, angle: p.angle, cooldown: 0, life: TURRET_LIFETIME })
+        playSfx('turret')
         break
       }
     }
@@ -621,6 +741,7 @@ export class Game {
       const y = p.y + Math.sin(p.angle) * reach - h / 2
       if (this.rectBlocked(x, y, w, h)) continue
       this.barricades.push({ x, y, w, h, hp: BARRICADE_HP, maxHp: BARRICADE_HP })
+      playSfx('barricade')
       p.barricadeCharges -= 1
       return
     }
@@ -902,6 +1023,18 @@ export class Game {
       b.y += b.vy * dt
       b.life -= dt
       let dead = b.life <= 0 || circleHitsWall(this.map, b.x, b.y, 2)
+      const boss = this.boss
+      if (!dead && boss && boss.hp > 0 && Math.hypot(boss.x - b.x, boss.y - b.y) < boss.r) {
+        const travelled = 1 - b.life / b.maxLife
+        boss.hp -= b.damage * (1 - (1 - b.falloff) * travelled)
+        boss.hurt = 0.12
+        if (boss.hp <= boss.maxHp / 2 && boss.phase === 1) {
+          boss.phase = 2
+          boss.dashTimer = 2
+          playSfx('boss-roar')
+        }
+        if (!b.pierce) dead = true
+      }
       if (!dead) {
         for (let j = this.enemies.length - 1; j >= 0; j--) {
           const e = this.enemies[j]
@@ -931,6 +1064,117 @@ export class Game {
     if (Math.random() < 0.22) {
       this.ammoBoxes.push({ x: z.x, y: z.y, amount: 20 })
     }
+  }
+
+  /**
+   * Phase 1 stalks the nearest player, spitting venom rings and hatching
+   * brood. Below half health she enrages: faster, and charging every 8s.
+   */
+  private updateBoss(dt: number) {
+    const b = this.boss
+    if (!b || b.hp <= 0) return
+    b.wobble += dt
+    b.hurt = Math.max(0, b.hurt - dt)
+    b.attackCooldown = Math.max(0, b.attackCooldown - dt)
+
+    const prey = this.nearestPlayerTo(b)
+    if (prey) b.angle = Math.atan2(prey.y - b.y, prey.x - b.x)
+
+    if (b.dashing > 0) {
+      b.dashing -= dt
+      this.moveCircle(b, b.dashDir.x * BOSS_DASH_SPEED * dt, b.dashDir.y * BOSS_DASH_SPEED * dt)
+    } else if (prey) {
+      const speed = b.baseSpeed * (b.phase === 2 ? BOSS_ENRAGE_SPEED : 1)
+      this.moveCircle(b, Math.cos(b.angle) * speed * dt, Math.sin(b.angle) * speed * dt)
+    }
+
+    b.ringTimer -= dt
+    if (b.ringTimer <= 0) {
+      b.ringTimer = BOSS_RING_INTERVAL
+      this.fireVenomRing(b)
+    }
+
+    b.broodTimer -= dt
+    if (b.broodTimer <= 0) {
+      b.broodTimer = BOSS_BROOD_INTERVAL
+      if (this.enemies.length < BOSS_BROOD_MAX) {
+        const spot = this.openSpot(12, b, 80, 220)
+        this.enemies.push(this.makeBug(spot))
+      }
+    }
+
+    if (b.phase === 2 && b.dashing <= 0) {
+      b.dashTimer -= dt
+      if (b.dashTimer <= 0 && prey) {
+        b.dashTimer = BOSS_DASH_INTERVAL
+        b.dashing = BOSS_DASH_TIME
+        b.dashDir = { x: Math.cos(b.angle), y: Math.sin(b.angle) }
+        playSfx('boss-dash')
+      }
+    }
+
+    if (prey && b.attackCooldown === 0) {
+      const d = Math.hypot(prey.x - b.x, prey.y - b.y)
+      if (d < b.r + prey.r) {
+        prey.hp -= BOSS_CONTACT_DAMAGE
+        prey.hurtCooldown = 0.3
+        prey.safeTimer = 0
+        b.attackCooldown = 1
+      }
+    }
+  }
+
+  private fireVenomRing(b: Boss) {
+    for (let i = 0; i < BOSS_RING_SHOTS; i++) {
+      const a = (i / BOSS_RING_SHOTS) * Math.PI * 2 + b.wobble
+      this.venom.push({
+        x: b.x + Math.cos(a) * (b.r + 6),
+        y: b.y + Math.sin(a) * (b.r + 6),
+        vx: Math.cos(a) * VENOM_SPEED,
+        vy: Math.sin(a) * VENOM_SPEED,
+        r: 7,
+        life: VENOM_LIFE,
+      })
+    }
+  }
+
+  private updateVenom(dt: number) {
+    for (let i = this.venom.length - 1; i >= 0; i--) {
+      const v = this.venom[i]
+      v.x += v.vx * dt
+      v.y += v.vy * dt
+      v.life -= dt
+      let dead = v.life <= 0 || circleHitsWall(this.map, v.x, v.y, v.r)
+      if (!dead) {
+        for (const p of this.alivePlayers) {
+          if (this.isCloaked(p) || p.hurtCooldown > 0) continue
+          if (Math.hypot(p.x - v.x, p.y - v.y) > p.r + v.r) continue
+          // Venom is a sting: it feeds the infection meter, not just health.
+          p.stings += 1
+          p.hp -= 5
+          p.hurtCooldown = 0.5
+          p.safeTimer = 0
+          playSfx('sting')
+          dead = true
+          break
+        }
+      }
+      if (dead) this.venom.splice(i, 1)
+    }
+  }
+
+  private nearestPlayerTo(from: { x: number; y: number }): Player | null {
+    let best: Player | null = null
+    let bestD = Infinity
+    for (const p of this.alivePlayers) {
+      if (this.isCloaked(p)) continue
+      const d = Math.hypot(p.x - from.x, p.y - from.y)
+      if (d < bestD) {
+        bestD = d
+        best = p
+      }
+    }
+    return best
   }
 
   private updateSurvivors(dt: number) {
@@ -1149,18 +1393,21 @@ export class Game {
     const mission = this.mission
     if (!mission) return
     const protect = mission.type === 'protect'
+    const boss = mission.type === 'boss'
     const maxAlive = protect
       ? 4 + mission.survivors * 2
-      : Math.min(14, Math.max(4, Math.ceil(mission.target / 3)))
+      : boss
+        ? 6
+        : Math.min(14, Math.max(4, Math.ceil(mission.target / 3)))
     if (this.enemies.length >= maxAlive) return
-    if (!protect) {
+    if (!protect && !boss) {
       const remaining = mission.target - this.kills
       if (this.spawned - this.kills >= remaining + 4) return
     }
 
     this.spawnTimer -= dt
     if (this.spawnTimer > 0) return
-    this.spawnTimer = protect ? 1.5 : 0.9
+    this.spawnTimer = protect ? 1.5 : boss ? 2.4 : 0.9
 
     const spot = this.spawnPoint()
     if (!spot) return
@@ -1263,7 +1510,10 @@ export class Game {
     this.drawMapLabel()
     if (this.mission?.type === 'protect') this.drawExtraction()
 
-    for (const w of m.walls) this.drawStructure(w)
+    for (const w of m.walls) {
+      if (this.textures === 'enhanced') this.drawStructure3D(w)
+      else this.drawStructure(w)
+    }
 
     for (const a of this.ammoBoxes) {
       ctx.fillStyle = '#f4c542'
@@ -1281,9 +1531,13 @@ export class Game {
     for (const t of this.turrets) this.drawTurret(t)
 
     for (const e of this.enemies) {
+      this.drawGroundShadow(e.x, e.y, e.r)
       if (e.kind === 'bug') this.drawBug(e)
       else this.drawZombie(e)
     }
+
+    if (this.boss) this.drawBoss(this.boss)
+    for (const v of this.venom) this.drawVenom(v)
 
     for (const b of this.bullets) {
       ctx.strokeStyle = b.color
@@ -1298,7 +1552,10 @@ export class Game {
       ctx.stroke()
     }
 
-    for (const p of this.players) this.drawPlayer(p)
+    for (const p of this.players) {
+      this.drawGroundShadow(p.x, p.y, p.r)
+      this.drawPlayer(p)
+    }
     ctx.restore()
 
     this.drawCrosshair()
@@ -1438,6 +1695,197 @@ export class Game {
     ctx.strokeRect(w.x, w.y, w.w, w.h)
   }
 
+  /**
+   * Enhanced pack: extrude the footprint away from the camera centre so the
+   * building shows a lit top face and shaded sides, like a block.
+   */
+  private drawStructure3D(w: Rect) {
+    const ctx = this.ctx
+    const m = this.map
+    if (w.kind === 'barrier') {
+      this.drawStructure(w)
+      return
+    }
+    const cx = this.camera.x + this.viewW / (2 * this.zoom)
+    const cy = this.camera.y + this.viewH / (2 * this.zoom)
+    const k = BUILDING_HEIGHT
+    const top: Rect = {
+      x: cx + (w.x - cx) * (1 + k),
+      y: cy + (w.y - cy) * (1 + k),
+      w: w.w * (1 + k),
+      h: w.h * (1 + k),
+      kind: w.kind,
+    }
+
+    // Footprint shadow, then the four side faces up to the roof outline.
+    ctx.save()
+    ctx.fillStyle = 'rgba(0,0,0,0.45)'
+    ctx.fillRect(w.x, w.y, w.w, w.h)
+
+    const base = [
+      { x: w.x, y: w.y },
+      { x: w.x + w.w, y: w.y },
+      { x: w.x + w.w, y: w.y + w.h },
+      { x: w.x, y: w.y + w.h },
+    ]
+    const roof = [
+      { x: top.x, y: top.y },
+      { x: top.x + top.w, y: top.y },
+      { x: top.x + top.w, y: top.y + top.h },
+      { x: top.x, y: top.y + top.h },
+    ]
+    const shades = ['rgba(0,0,0,0.45)', 'rgba(0,0,0,0.2)', 'rgba(0,0,0,0.3)', 'rgba(0,0,0,0.38)']
+    for (let i = 0; i < 4; i++) {
+      const a = base[i]
+      const b = base[(i + 1) % 4]
+      const c = roof[(i + 1) % 4]
+      const d = roof[i]
+      ctx.beginPath()
+      ctx.moveTo(a.x, a.y)
+      ctx.lineTo(b.x, b.y)
+      ctx.lineTo(c.x, c.y)
+      ctx.lineTo(d.x, d.y)
+      ctx.closePath()
+      ctx.fillStyle = m.wallColor
+      ctx.fill()
+      ctx.fillStyle = shades[i]
+      ctx.fill()
+      ctx.strokeStyle = m.wallEdge
+      ctx.lineWidth = 2
+      ctx.stroke()
+    }
+    ctx.restore()
+
+    this.drawStructure(top)
+  }
+
+  /** Soft ellipse under a unit so it reads as standing on the ground. */
+  private drawGroundShadow(x: number, y: number, r: number) {
+    if (this.textures !== 'enhanced') return
+    const ctx = this.ctx
+    ctx.save()
+    ctx.fillStyle = 'rgba(0,0,0,0.38)'
+    ctx.beginPath()
+    ctx.ellipse(x + r * 0.15, y + r * 0.55, r * 0.95, r * 0.45, 0, 0, Math.PI * 2)
+    ctx.fill()
+    ctx.restore()
+  }
+
+  private drawVenom(v: Projectile) {
+    const ctx = this.ctx
+    this.drawGroundShadow(v.x, v.y, v.r * 0.8)
+    ctx.save()
+    ctx.translate(v.x, this.textures === 'enhanced' ? v.y - UNIT_LIFT : v.y)
+    const grad = ctx.createRadialGradient(-v.r * 0.3, -v.r * 0.3, 1, 0, 0, v.r)
+    grad.addColorStop(0, '#d9ff8a')
+    grad.addColorStop(1, '#5aa30d')
+    ctx.fillStyle = this.textures === 'enhanced' ? grad : '#8fdb2e'
+    ctx.beginPath()
+    ctx.arc(0, 0, v.r, 0, Math.PI * 2)
+    ctx.fill()
+    ctx.strokeStyle = 'rgba(30,60,0,0.8)'
+    ctx.lineWidth = 1.5
+    ctx.stroke()
+    ctx.restore()
+  }
+
+  /** The Hive Mother: layered blocky body with wings floating over her shadow. */
+  private drawBoss(b: Boss) {
+    const ctx = this.ctx
+    const enhanced = this.textures === 'enhanced'
+    const lift = enhanced ? UNIT_LIFT * 3 : 0
+    const flap = Math.sin(b.wobble * 9) * 0.45
+    const enraged = b.phase === 2
+
+    ctx.save()
+    ctx.fillStyle = 'rgba(0,0,0,0.45)'
+    ctx.beginPath()
+    ctx.ellipse(b.x, b.y + b.r * 0.4, b.r * 1.05, b.r * 0.5, 0, 0, Math.PI * 2)
+    ctx.fill()
+    ctx.restore()
+
+    ctx.save()
+    ctx.translate(b.x, b.y - lift)
+    ctx.rotate(b.angle)
+
+    // Wings first so the body layers sit on top of them.
+    ctx.fillStyle = enraged ? 'rgba(255,140,120,0.42)' : 'rgba(255, 213, 128, 0.4)'
+    for (const side of [-1, 1]) {
+      ctx.save()
+      ctx.rotate(side * (0.8 + flap * side))
+      ctx.beginPath()
+      ctx.ellipse(-b.r * 0.2, -b.r * 1.5 * side, b.r * 0.55, b.r * 1.25, 0, 0, Math.PI * 2)
+      ctx.fill()
+      ctx.strokeStyle = 'rgba(255,255,255,0.25)'
+      ctx.lineWidth = 2
+      ctx.stroke()
+      ctx.restore()
+    }
+
+    const body = enraged ? '#e04a2f' : '#f0871b'
+    const dark = enraged ? '#7c1d0f' : '#8a4b00'
+    if (enhanced) {
+      // Stacked blocks: abdomen, thorax, head, each with a lit top edge.
+      const segments = [
+        { dx: -b.r * 0.75, size: b.r * 1.05 },
+        { dx: 0, size: b.r * 0.95 },
+        { dx: b.r * 0.8, size: b.r * 0.68 },
+      ]
+      for (const seg of segments) {
+        ctx.fillStyle = dark
+        ctx.fillRect(seg.dx - seg.size / 2, -seg.size / 2, seg.size, seg.size)
+        ctx.fillStyle = body
+        ctx.fillRect(seg.dx - seg.size / 2, -seg.size / 2, seg.size, seg.size * 0.78)
+        ctx.fillStyle = 'rgba(255,255,255,0.18)'
+        ctx.fillRect(seg.dx - seg.size / 2, -seg.size / 2, seg.size, seg.size * 0.18)
+        ctx.strokeStyle = dark
+        ctx.lineWidth = 3
+        ctx.strokeRect(seg.dx - seg.size / 2, -seg.size / 2, seg.size, seg.size)
+      }
+    } else {
+      ctx.beginPath()
+      ctx.ellipse(0, 0, b.r, b.r * 0.82, 0, 0, Math.PI * 2)
+      ctx.fillStyle = body
+      ctx.fill()
+      ctx.strokeStyle = dark
+      ctx.lineWidth = 4
+      ctx.stroke()
+    }
+
+    // Eyes and stinger point along her facing.
+    ctx.fillStyle = enraged ? '#fff1a8' : '#2b0b00'
+    for (const side of [-1, 1]) {
+      ctx.beginPath()
+      ctx.arc(b.r * 0.85, side * b.r * 0.22, b.r * 0.12, 0, Math.PI * 2)
+      ctx.fill()
+    }
+    ctx.fillStyle = dark
+    ctx.beginPath()
+    ctx.moveTo(-b.r * 1.25, 0)
+    ctx.lineTo(-b.r * 0.75, -b.r * 0.22)
+    ctx.lineTo(-b.r * 0.75, b.r * 0.22)
+    ctx.closePath()
+    ctx.fill()
+
+    if (b.hurt > 0) {
+      ctx.fillStyle = 'rgba(255,255,255,0.45)'
+      ctx.beginPath()
+      ctx.arc(0, 0, b.r, 0, Math.PI * 2)
+      ctx.fill()
+    }
+    ctx.restore()
+
+    if (b.dashing > 0) {
+      ctx.save()
+      ctx.strokeStyle = 'rgba(255,80,60,0.8)'
+      ctx.lineWidth = 4
+      ctx.beginPath()
+      ctx.arc(b.x, b.y - lift, b.r + 12, 0, Math.PI * 2)
+      ctx.stroke()
+      ctx.restore()
+    }
+  }
+
   private drawExtraction() {
     const ctx = this.ctx
     const { x, y } = this.map.extraction
@@ -1564,9 +2012,20 @@ export class Game {
   private drawZombie(z: Enemy) {
     const ctx = this.ctx
     this.drawStatusRing(z)
+    const enhanced = this.textures === 'enhanced'
+    const y = enhanced ? z.y - UNIT_LIFT : z.y
+    const flat = z.r > 16 ? '#8b1414' : '#d62828'
     ctx.beginPath()
-    ctx.arc(z.x, z.y, z.r, 0, Math.PI * 2)
-    ctx.fillStyle = z.r > 16 ? '#8b1414' : '#d62828'
+    ctx.arc(z.x, y, z.r, 0, Math.PI * 2)
+    if (enhanced) {
+      // Shaded sphere so the body reads as standing above its shadow.
+      const grad = ctx.createRadialGradient(z.x - z.r * 0.35, y - z.r * 0.4, z.r * 0.15, z.x, y, z.r)
+      grad.addColorStop(0, z.r > 16 ? '#c94141' : '#ff6b5e')
+      grad.addColorStop(1, z.r > 16 ? '#5c0d0d' : '#8f1616')
+      ctx.fillStyle = grad
+    } else {
+      ctx.fillStyle = flat
+    }
     ctx.fill()
     ctx.strokeStyle = '#4a0a0a'
     ctx.lineWidth = 2
@@ -1578,7 +2037,8 @@ export class Game {
     this.drawStatusRing(b)
     const flap = Math.sin(b.wobble * 22) * 0.6
     ctx.save()
-    ctx.translate(b.x, b.y)
+    // In the 3D pack the bug floats a little above its ground shadow.
+    ctx.translate(b.x, this.textures === 'enhanced' ? b.y - UNIT_LIFT * 2 : b.y)
     ctx.fillStyle = 'rgba(255, 213, 128, 0.45)'
     for (const side of [-1, 1]) {
       ctx.save()
@@ -1612,7 +2072,7 @@ export class Game {
   private drawPlayer(p: Player) {
     const ctx = this.ctx
     ctx.save()
-    ctx.translate(p.x, p.y)
+    ctx.translate(p.x, this.textures === 'enhanced' ? p.y - UNIT_LIFT : p.y)
     if (p.down) ctx.globalAlpha = 0.4
 
     if (this.isCloaked(p)) {
@@ -1736,6 +2196,16 @@ export class Game {
       ctx.beginPath()
       ctx.arc(mx + e.x * s, my + e.y * s, e.kind === 'bug' ? 2 : 2.5, 0, Math.PI * 2)
       ctx.fill()
+    }
+
+    if (this.boss) {
+      ctx.fillStyle = '#f0871b'
+      ctx.beginPath()
+      ctx.arc(mx + this.boss.x * s, my + this.boss.y * s, 6, 0, Math.PI * 2)
+      ctx.fill()
+      ctx.strokeStyle = '#fff1a8'
+      ctx.lineWidth = 1.5
+      ctx.stroke()
     }
 
     ctx.fillStyle = '#a78bfa'

@@ -2,6 +2,7 @@ import type { CharacterId } from './characters'
 import { CHARACTERS } from './characters'
 import type { PathId } from './missions'
 import { MISSIONS } from './missions'
+import type { TexturePack } from './theme'
 import type { WeaponId } from './weapons'
 import { STARTER_WEAPONS, WEAPONS } from './weapons'
 
@@ -20,6 +21,8 @@ export interface Profile {
   completed: string[]
   /** Campaign branch the player committed to. */
   path: PathId | null
+  /** Chosen render style; null until the intro splash is answered. */
+  textures: TexturePack | null
 }
 
 const DEFAULT_PROFILE: Profile = {
@@ -31,6 +34,7 @@ const DEFAULT_PROFILE: Profile = {
   players: 1,
   completed: [],
   path: null,
+  textures: null,
 }
 
 function isWeaponId(value: unknown): value is WeaponId {
@@ -47,6 +51,10 @@ function isMissionId(value: unknown): value is string {
 
 function isPathId(value: unknown): value is PathId {
   return value === 'combat' || value === 'rescue'
+}
+
+function isTexturePack(value: unknown): value is TexturePack {
+  return value === 'classic' || value === 'enhanced'
 }
 
 export function loadProfile(): Profile {
@@ -72,6 +80,7 @@ export function loadProfile(): Profile {
       players: record.players === 2 ? 2 : 1,
       completed: Array.isArray(record.completed) ? record.completed.filter(isMissionId) : [],
       path: isPathId(record.path) ? record.path : null,
+      textures: isTexturePack(record.textures) ? record.textures : null,
     }
   } catch {
     return { ...DEFAULT_PROFILE, owned: [...STARTER_WEAPONS], completed: [] }
