@@ -5,5 +5,6 @@ export default defineConfig({
   plugins: [tailwindcss()],
   server: {
     host: true,
+    allowedHosts: ['.devinapps.com'],
   },
 })
