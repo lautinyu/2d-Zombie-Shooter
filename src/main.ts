@@ -19,26 +19,7 @@ app.innerHTML = `
   <!-- HUD -->
   <div id="hud" class="pointer-events-none absolute inset-0 hidden select-none text-white">
     <div class="absolute left-5 top-5 w-80 space-y-3">
-      <div class="rounded-lg bg-black/60 p-3 ring-1 ring-white/10">
-        <div class="flex items-center justify-between text-xs font-semibold uppercase tracking-wider text-emerald-300">
-          <span>Health</span><span id="hp-text">100 / 100</span>
-        </div>
-        <div class="mt-1.5 h-3 w-full overflow-hidden rounded-full bg-white/10">
-          <div id="hp-bar" class="h-full w-full rounded-full bg-emerald-500 transition-[width] duration-150"></div>
-        </div>
-        <div class="mt-3 flex items-baseline justify-between">
-          <span class="text-xs font-semibold uppercase tracking-wider text-amber-300">Ammo</span>
-          <span id="ammo-text" class="font-mono text-lg font-bold text-amber-200">15 / 90</span>
-        </div>
-        <div id="reload-text" class="hidden text-xs font-semibold text-amber-400">RELOADING…</div>
-
-        <div class="mt-3 border-t border-white/10 pt-2">
-          <div class="flex items-center justify-between text-xs font-semibold uppercase tracking-wider text-orange-300">
-            <span>Infection</span><span id="sting-text">Stings: 0/5</span>
-          </div>
-          <div id="sting-pips" class="mt-1.5 flex gap-1.5"></div>
-        </div>
-      </div>
+      <div id="player-panels" class="space-y-2"></div>
 
       <div class="rounded-lg bg-black/60 p-3 ring-1 ring-white/10">
         <div id="mission-name" class="text-sm font-bold text-white">Mission</div>
@@ -62,8 +43,6 @@ app.innerHTML = `
           <span id="hud-scrap" class="font-mono text-xs font-bold text-yellow-300">+0 scrap</span>
         </div>
         <div id="hud-perk" class="mt-0.5 text-xs font-semibold text-sky-300"></div>
-        <div id="hud-character" class="mt-1 border-t border-white/10 pt-1 text-xs font-semibold text-emerald-300"></div>
-        <div id="hud-lives" class="mt-0.5 hidden text-xs font-semibold text-sky-300"></div>
       </div>
     </div>
 
@@ -71,7 +50,7 @@ app.innerHTML = `
       <span id="current-zone">The Streets</span>
     </div>
 
-    <div class="absolute left-5 bottom-5 rounded-md bg-black/50 px-3 py-2 text-[11px] leading-relaxed text-slate-400">
+    <div id="hud-controls" class="absolute left-5 bottom-5 rounded-md bg-black/50 px-3 py-2 text-[11px] leading-relaxed text-slate-400">
       WASD / Arrows to move · Mouse to aim · Left click to shoot · R to reload
     </div>
   </div>
@@ -87,6 +66,11 @@ app.innerHTML = `
         <button id="shop-btn" class="rounded-lg bg-yellow-500/15 px-6 py-2 text-sm font-bold text-yellow-300 ring-1 ring-yellow-400/40 hover:bg-yellow-500/25">Weapons Shop</button>
         <button id="locker-btn" class="rounded-lg bg-sky-500/15 px-6 py-2 text-sm font-bold text-sky-300 ring-1 ring-sky-400/40 hover:bg-sky-500/25">Locker</button>
       </div>
+      <div class="mt-4 flex items-center justify-center gap-2 text-xs">
+        <span class="font-semibold uppercase tracking-wider text-slate-400">Players</span>
+        <button id="players-1" class="rounded-lg px-4 py-1.5 font-bold">1 Player</button>
+        <button id="players-2" class="rounded-lg px-4 py-1.5 font-bold">2 Players</button>
+      </div>
       <div class="mt-3 text-center text-xs text-slate-400">
         Equipped: <span id="menu-equipped" class="font-semibold text-emerald-300">Rusty Pistol</span>
         · Survivor: <span id="menu-character" class="font-semibold text-amber-300">—</span>
@@ -98,6 +82,7 @@ app.innerHTML = `
         WASD or Arrow keys to move · aim with the mouse · left click to shoot · R to reload.
         Each mission loads its own isolated map. Yellow crates restock ammo.
         <span class="font-semibold text-orange-300">Orange Plague Bugs</span> are fast and sting — five stings and you turn.
+        <div class="mt-2"><span class="font-semibold text-slate-200">Co-op:</span> Player 2 moves with the Arrow keys, auto-aims at the nearest enemy and fires on its own or with the <span class="font-mono text-slate-200">.</span> key.</div>
       </div>
     </div>
   </div>
@@ -117,6 +102,10 @@ app.innerHTML = `
     <div class="w-full max-w-4xl">
       <h2 class="text-center text-4xl font-black tracking-tight text-emerald-400">CHOOSE YOUR SURVIVOR</h2>
       <p class="mt-2 text-center text-sm text-slate-400">Each survivor carries a passive that changes how the wasteland treats you.</p>
+      <div id="character-slots" class="mt-4 hidden justify-center gap-2 text-xs">
+        <button id="slot-1" class="rounded-lg px-4 py-1.5 font-bold">Player 1</button>
+        <button id="slot-2" class="rounded-lg px-4 py-1.5 font-bold">Player 2</button>
+      </div>
       <div id="character-list" class="mt-8 grid gap-4 md:grid-cols-2"></div>
       <div class="mt-6 text-center">
         <button id="characters-close" class="hidden rounded-lg bg-white/10 px-8 py-3 text-sm font-bold text-white hover:bg-white/20">Back to Menu</button>
@@ -309,19 +298,43 @@ function launch(m: Mission) {
     profile.path = m.path
     persist()
   }
-  game.startMission(m, weaponById(profile.equipped), characterById(activeCharacter()))
+  const roster = [characterById(activeCharacter())]
+  if (profile.players === 2) roster.push(characterById(secondCharacter()))
+  game.startMission(m, weaponById(profile.equipped), roster)
 }
 
 function activeCharacter(): CharacterId {
   return profile.character ?? CHARACTERS[0].id
 }
 
+/** Player 2 defaults to a different survivor than player 1. */
+function secondCharacter(): CharacterId {
+  if (profile.character2 && profile.character2 !== activeCharacter()) return profile.character2
+  const other = CHARACTERS.find((c) => c.id !== activeCharacter())
+  return other ? other.id : CHARACTERS[0].id
+}
+
 const characterList = el('character-list')
+const characterSlots = el('character-slots')
+let editingSlot: 1 | 2 = 1
+
+function slotButtonClass(active: boolean) {
+  return `rounded-lg px-4 py-1.5 font-bold ${
+    active ? 'bg-emerald-500 text-emerald-950' : 'bg-white/10 text-slate-300 hover:bg-white/20'
+  }`
+}
 
 function renderCharacters() {
+  characterSlots.classList.toggle('hidden', profile.players !== 2)
+  characterSlots.classList.toggle('flex', profile.players === 2)
+  if (profile.players === 1) editingSlot = 1
+  el('slot-1').className = slotButtonClass(editingSlot === 1)
+  el('slot-2').className = slotButtonClass(editingSlot === 2)
+
+  const selectedId = editingSlot === 1 ? profile.character : secondCharacter()
   characterList.innerHTML = ''
   for (const c of CHARACTERS) {
-    const chosen = profile.character === c.id
+    const chosen = selectedId === c.id
     const card = document.createElement('button')
     card.className = `rounded-xl p-6 text-left ring-1 transition ${
       chosen ? 'bg-emerald-500/10 ring-emerald-400/70' : 'bg-white/5 ring-white/10 hover:bg-white/10'
@@ -339,8 +352,14 @@ function renderCharacters() {
       </div>
     `
     card.addEventListener('click', () => {
-      profile.character = c.id
+      if (editingSlot === 1) profile.character = c.id
+      else profile.character2 = c.id
       persist()
+      if (profile.players === 2 && editingSlot === 1) {
+        editingSlot = 2
+        renderCharacters()
+        return
+      }
       renderCharacters()
       show(characterScreen, false)
       show(menu, true)
@@ -349,6 +368,30 @@ function renderCharacters() {
   }
   el<HTMLButtonElement>('characters-close').classList.toggle('hidden', profile.character === null)
 }
+
+el('slot-1').addEventListener('click', () => {
+  editingSlot = 1
+  renderCharacters()
+})
+el('slot-2').addEventListener('click', () => {
+  editingSlot = 2
+  renderCharacters()
+})
+
+function renderPlayerToggle() {
+  el('players-1').className = slotButtonClass(profile.players === 1)
+  el('players-2').className = slotButtonClass(profile.players === 2)
+}
+
+function setPlayers(count: 1 | 2) {
+  profile.players = count
+  if (count === 2 && !profile.character2) profile.character2 = secondCharacter()
+  persist()
+  renderCharacters()
+}
+
+el('players-1').addEventListener('click', () => setPlayers(1))
+el('players-2').addEventListener('click', () => setPlayers(2))
 
 el('character-btn').addEventListener('click', () => {
   renderCharacters()
@@ -378,8 +421,11 @@ function persist() {
   el('arsenal-scrap').textContent = `${profile.scrap}`
   el('menu-equipped').textContent = weaponById(profile.equipped).name
   el('menu-character').textContent = profile.character
-    ? characterById(profile.character).name
+    ? profile.players === 2
+      ? `${characterById(profile.character).name} + ${characterById(secondCharacter()).name}`
+      : characterById(profile.character).name
     : 'not chosen'
+  renderPlayerToggle()
   renderCampaign()
 }
 
@@ -553,10 +599,8 @@ game.onStateChange = (state: GameState) => {
   }
 }
 
-const hpBar = el('hp-bar')
-const hpText = el('hp-text')
-const ammoText = el('ammo-text')
-const reloadText = el('reload-text')
+const playerPanels = el('player-panels')
+const hudControls = el('hud-controls')
 const missionBar = el('mission-bar')
 const missionName = el('mission-name')
 const missionZone = el('mission-zone')
@@ -564,24 +608,94 @@ const killText = el('kill-text')
 const objectiveText = el('objective-text')
 const survivorPanel = el('survivor-panel')
 const survivorList = el('survivor-list')
-const hudLives = el('hud-lives')
 const currentZone = el('current-zone')
-const stingText = el('sting-text')
-const stingPips = el('sting-pips')
 const hudWeapon = el('hud-weapon')
 const hudPerk = el('hud-perk')
 const hudScrap = el('hud-scrap')
-const hudCharacter = el('hud-character')
+
+function playerPanel(): HTMLElement {
+  const panel = document.createElement('div')
+  panel.className = 'rounded-lg bg-black/60 p-3 ring-1 ring-white/10'
+  panel.innerHTML = `
+    <div class="flex items-center justify-between text-xs font-bold uppercase tracking-wider">
+      <span class="flex items-center gap-2">
+        <span class="inline-block h-2.5 w-2.5 rounded-full" data-role="dot"></span>
+        <span data-role="name"></span>
+        <span class="font-normal normal-case text-slate-400" data-role="character"></span>
+      </span>
+      <span data-role="hp" class="text-emerald-300"></span>
+    </div>
+    <div class="mt-1.5 h-3 w-full overflow-hidden rounded-full bg-white/10">
+      <div data-role="hp-bar" class="h-full w-full rounded-full bg-emerald-500"></div>
+    </div>
+    <div class="mt-2 flex items-baseline justify-between">
+      <span class="text-[11px] font-semibold uppercase tracking-wider text-amber-300">Ammo</span>
+      <span data-role="ammo" class="font-mono text-base font-bold text-amber-200"></span>
+    </div>
+    <div data-role="reload" class="hidden text-[11px] font-semibold text-amber-400">RELOADING…</div>
+    <div data-role="lives" class="hidden text-[11px] font-semibold text-sky-300"></div>
+    <div class="mt-2 flex items-center justify-between text-[11px] font-semibold uppercase tracking-wider text-orange-300">
+      <span>Infection</span><span data-role="stings"></span>
+    </div>
+    <div data-role="pips" class="mt-1 flex gap-1.5"></div>
+  `
+  return panel
+}
+
+function pick(root: HTMLElement, role: string): HTMLElement {
+  const node = root.querySelector<HTMLElement>(`[data-role="${role}"]`)
+  if (!node) throw new Error(`missing hud role ${role}`)
+  return node
+}
+
+function updatePlayerPanels(h: Hud) {
+  if (playerPanels.children.length !== h.players.length) {
+    playerPanels.innerHTML = ''
+    for (const _ of h.players) playerPanels.appendChild(playerPanel())
+  }
+  h.players.forEach((p, i) => {
+    const panel = playerPanels.children[i] as HTMLElement
+    const pct = (p.hp / p.maxHp) * 100
+    pick(panel, 'dot').style.background = p.color
+    pick(panel, 'name').textContent = h.players.length > 1 ? p.name : 'Health'
+    pick(panel, 'character').textContent = p.characterName
+    pick(panel, 'hp').textContent = p.down ? 'DOWN' : `${p.hp} / ${p.maxHp}`
+    const bar = pick(panel, 'hp-bar')
+    bar.style.width = `${pct}%`
+    bar.className = `h-full rounded-full transition-[width] duration-150 ${
+      pct > 50 ? 'bg-emerald-500' : pct > 25 ? 'bg-amber-500' : 'bg-red-500'
+    }`
+    pick(panel, 'ammo').textContent = `${p.mag} / ${p.reserve}`
+    pick(panel, 'reload').classList.toggle('hidden', !p.reloading)
+    const lives = pick(panel, 'lives')
+    lives.classList.toggle('hidden', p.lives <= 0)
+    lives.textContent = `Extra lives: ${p.lives}`
+    const stings = pick(panel, 'stings')
+    stings.textContent = `Stings: ${p.stings}/${h.maxStings}`
+    stings.className = `text-[11px] font-semibold ${
+      p.stings >= h.maxStings - 1 ? 'animate-pulse text-red-400' : 'text-orange-300'
+    }`
+    const pips = pick(panel, 'pips')
+    if (pips.children.length !== h.maxStings) {
+      pips.innerHTML = ''
+      for (let s = 0; s < h.maxStings; s++) pips.appendChild(document.createElement('div'))
+    }
+    Array.from(pips.children).forEach((pip, idx) => {
+      pip.className = `h-2 flex-1 rounded-full ${idx < p.stings ? 'bg-orange-400' : 'bg-white/10'}`
+    })
+    panel.className = `rounded-lg bg-black/60 p-3 ring-1 ${
+      p.down ? 'opacity-60 ring-red-500/50' : 'ring-white/10'
+    }`
+  })
+
+  hudControls.innerHTML =
+    h.players.length > 1
+      ? 'P1: WASD · mouse aim · left click to shoot · R to reload<br>P2: Arrow keys · auto-aim · fires automatically or with .'
+      : 'WASD / Arrows to move · Mouse to aim · Left click to shoot · R to reload'
+}
 
 game.onHud = (h: Hud) => {
-  const hpPct = (h.hp / h.maxHp) * 100
-  hpBar.style.width = `${hpPct}%`
-  hpBar.className = `h-full rounded-full transition-[width] duration-150 ${
-    hpPct > 50 ? 'bg-emerald-500' : hpPct > 25 ? 'bg-amber-500' : 'bg-red-500'
-  }`
-  hpText.textContent = `${h.hp} / ${h.maxHp}`
-  ammoText.textContent = `${h.mag} / ${h.reserve}`
-  reloadText.classList.toggle('hidden', !h.reloading)
+  updatePlayerPanels(h)
   missionName.textContent = h.missionName
   missionZone.textContent = h.mapName
   objectiveText.textContent = h.objective
@@ -612,7 +726,9 @@ game.onHud = (h: Hud) => {
       const labels = row.querySelectorAll('span')
       labels[0].textContent = `Survivor ${i + 1}`
       const pct = (s.hp / s.maxHp) * 100
-      labels[1].textContent = s.safe ? 'SAFE' : `${Math.round(pct)}%`
+      labels[1].textContent = s.safe
+        ? 'SAFE'
+        : `${Math.round(pct)}%${s.moving ? '' : ' · WAITING'}`
       const fill = row.querySelectorAll<HTMLElement>('div')[2]
       fill.style.width = `${pct}%`
       fill.className = `h-full rounded-full ${
@@ -621,25 +737,9 @@ game.onHud = (h: Hud) => {
     })
   }
 
-  stingText.textContent = `Stings: ${h.stings}/${h.maxStings}`
-  stingText.className = `text-xs font-semibold ${h.stings >= h.maxStings - 1 ? 'animate-pulse text-red-400' : 'text-orange-300'}`
-  if (stingPips.children.length !== h.maxStings) {
-    stingPips.innerHTML = ''
-    for (let i = 0; i < h.maxStings; i++) {
-      const pip = document.createElement('div')
-      stingPips.appendChild(pip)
-    }
-  }
-  Array.from(stingPips.children).forEach((pip, i) => {
-    pip.className = `h-2.5 flex-1 rounded-full ${i < h.stings ? 'bg-orange-400' : 'bg-white/10'}`
-  })
-
   hudWeapon.textContent = h.weaponName
   hudPerk.textContent = h.perkName ? `Talent: ${h.perkName}` : 'No talent'
   hudScrap.textContent = `+${h.scrap} scrap`
-  hudCharacter.textContent = h.characterName
-  hudLives.classList.toggle('hidden', h.lives <= 0)
-  hudLives.textContent = `Extra lives: ${h.lives}`
 }
 
 el('lore-btn').addEventListener('click', () => {

@@ -5,12 +5,15 @@ import type { Character } from './characters'
 import { characterById } from './characters'
 import { SCRAP_PER_BUG, SCRAP_PER_KILL } from './profile'
 import { playShot } from './audio'
-import type { GameMap } from './maps'
+import type { GameMap, Rect } from './maps'
 import { circleHitsWall, mapById } from './maps'
+import { extractionField, flowDirection } from './nav'
+import { drawCharacterSkin } from './skins'
 
 export type GameState = 'menu' | 'playing' | 'won' | 'lost'
 
 interface Player {
+  id: 1 | 2
   x: number
   y: number
   r: number
@@ -19,6 +22,21 @@ interface Player {
   speed: number
   angle: number
   hurtCooldown: number
+  character: Character
+  weapon: Weapon
+  mag: number
+  reserve: number
+  reloadTimer: number
+  fireTimer: number
+  shotsFired: number
+  shooting: boolean
+  queuedShot: boolean
+  stings: number
+  lives: number
+  safeTimer: number
+  down: boolean
+  /** Player 2 aims and fires at the nearest enemy on its own. */
+  auto: boolean
 }
 
 export type EnemyKind = 'zombie' | 'bug'
@@ -88,27 +106,37 @@ export interface HudSurvivor {
   hp: number
   maxHp: number
   safe: boolean
+  /** False while no player is close enough to escort them. */
+  moving: boolean
 }
 
-export interface Hud {
+export interface HudPlayer {
+  id: 1 | 2
+  name: string
+  characterName: string
+  color: string
   hp: number
   maxHp: number
   mag: number
   magSize: number
   reserve: number
   reloading: boolean
+  stings: number
+  lives: number
+  down: boolean
+}
+
+export interface Hud {
+  players: HudPlayer[]
   kills: number
   target: number
   missionName: string
   objective: string
   mapName: string
-  stings: number
   maxStings: number
   weaponName: string
   perkName: string
   scrap: number
-  characterName: string
-  lives: number
   survivors: HudSurvivor[]
   extracted: number
   isProtect: boolean
@@ -133,9 +161,18 @@ const IGNITE_CHANCE = 0.3
 const BUG_SPAWN_CHANCE = 0.2
 const HIVE_BUG_SPAWN_CHANCE = 0.45
 const EXTRACTION_RADIUS = 70
-const SURVIVOR_SPEED = 66
-/** Survivors only pull aggro when clearly closer than the player. */
+const SURVIVOR_SPEED = 54
+/** Survivors only advance while a player is close enough to escort them. */
+const ESCORT_RADIUS = 240
+const SURVIVOR_MAX_HP = 100
+const SURVIVOR_ZOMBIE_DAMAGE = 16
+const SURVIVOR_BUG_DAMAGE = 22
+/** Survivors only pull aggro when clearly closer than a player. */
 const SURVIVOR_AGGRO_BIAS = 0.75
+/** Co-op camera keeps this much slack around the pair before zooming out. */
+const COOP_CAMERA_MARGIN = 420
+const MIN_ZOOM = 0.5
+const P2_AUTO_FIRE_RANGE = 620
 const TURRET_RANGE = 460
 const TURRET_INTERVAL = 0.55
 const TURRET_DAMAGE = 9
@@ -147,7 +184,6 @@ export class Game {
   state: GameState = 'menu'
   mission: Mission | null = null
   kills = 0
-  stings = 0
   scrapEarned = 0
   extracted = 0
   deathCause: DeathCause = 'wounds'
@@ -155,20 +191,12 @@ export class Game {
   character: Character = characterById('nature-lover')
   map: GameMap = mapById('streets')
 
-  private player: Player = this.makePlayer(0, 0)
+  private players: Player[] = []
   private enemies: Enemy[] = []
   private bullets: Bullet[] = []
   private ammoBoxes: AmmoBox[] = []
   private survivors: Survivor[] = []
   private turret: Turret | null = null
-  private lives = 0
-  private safeTimer = 0
-
-  private mag = this.weapon.magSize
-  private reserve = this.weapon.reserveStart
-  private reloadTimer = 0
-  private fireTimer = 0
-  private shotsFired = 0
 
   private spawnTimer = 0
   private spawned = 0
@@ -176,10 +204,9 @@ export class Game {
   private keys = new Set<string>()
   private mouseWorld = { x: 0, y: 0 }
   private mouseScreen = { x: 0, y: 0 }
-  private shooting = false
-  private queuedShot = false
 
   private camera = { x: 0, y: 0 }
+  private zoom = 1
   private last = 0
   private running = false
 
@@ -196,17 +223,47 @@ export class Game {
     window.addEventListener('resize', () => this.resize())
   }
 
-  private makePlayer(x: number, y: number): Player {
+  private makePlayer(
+    id: 1 | 2,
+    x: number,
+    y: number,
+    weapon: Weapon,
+    character: Character,
+    auto: boolean
+  ): Player {
     return {
+      id,
       x,
       y,
       r: PLAYER_RADIUS,
       hp: 100,
       maxHp: 100,
-      speed: PLAYER_BASE_SPEED,
+      speed: PLAYER_BASE_SPEED * character.speedMultiplier,
       angle: 0,
       hurtCooldown: 0,
+      character,
+      weapon,
+      mag: weapon.magSize,
+      reserve: weapon.reserveStart,
+      reloadTimer: 0,
+      fireTimer: 0,
+      shotsFired: 0,
+      shooting: false,
+      queuedShot: false,
+      stings: 0,
+      lives: character.extraLives,
+      safeTimer: 0,
+      down: false,
+      auto,
     }
+  }
+
+  private get p1(): Player {
+    return this.players[0]
+  }
+
+  private get alivePlayers(): Player[] {
+    return this.players.filter((p) => !p.down)
   }
 
   private bindInput() {
@@ -215,7 +272,12 @@ export class Game {
       if (['arrowup', 'arrowdown', 'arrowleft', 'arrowright', ' '].includes(e.key.toLowerCase())) {
         e.preventDefault()
       }
-      if (e.key.toLowerCase() === 'r') this.startReload()
+      const key = e.key.toLowerCase()
+      if (key === 'r') this.startReload(this.p1)
+      if (key === '.') {
+        const p2 = this.players[1]
+        if (p2) p2.queuedShot = true
+      }
     })
     window.addEventListener('keyup', (e) => this.keys.delete(e.key.toLowerCase()))
     window.addEventListener('blur', () => this.keys.clear())
@@ -226,13 +288,13 @@ export class Game {
       this.mouseScreen.y = e.clientY - rect.top
     })
     this.canvas.addEventListener('mousedown', (e) => {
-      if (e.button === 0) {
-        this.shooting = true
-        this.queuedShot = true
+      if (e.button === 0 && this.p1) {
+        this.p1.shooting = true
+        this.p1.queuedShot = true
       }
     })
     window.addEventListener('mouseup', (e) => {
-      if (e.button === 0) this.shooting = false
+      if (e.button === 0 && this.p1) this.p1.shooting = false
     })
     this.canvas.addEventListener('contextmenu', (e) => e.preventDefault())
   }
@@ -254,61 +316,65 @@ export class Game {
     return window.innerHeight
   }
 
-  startMission(mission: Mission, weapon: Weapon, character: Character) {
+  startMission(mission: Mission, weapon: Weapon, characters: Character[]) {
     this.mission = mission
     this.weapon = weapon
-    this.character = character
+    this.character = characters[0]
     // Only the mission's own map is instantiated — other maps never load.
     this.map = mapById(mission.map)
     this.kills = 0
     this.scrapEarned = 0
     this.extracted = 0
-    this.shotsFired = 0
     this.spawned = 0
     this.spawnTimer = 0
-    this.stings = 0
-    this.safeTimer = 0
     this.deathCause = 'wounds'
     this.enemies = []
     this.bullets = []
     this.ammoBoxes = []
-    this.mag = weapon.magSize
-    this.reserve = weapon.reserveStart
-    this.reloadTimer = 0
-    this.shooting = false
-    this.queuedShot = false
-    this.lives = character.extraLives
+    this.zoom = 1
 
-    const spawn = this.openSpot(PLAYER_RADIUS + 10)
-    this.player = this.makePlayer(spawn.x, spawn.y)
-    this.player.speed = PLAYER_BASE_SPEED * character.speedMultiplier
+    this.players = []
+    characters.slice(0, 2).forEach((c, i) => {
+      const id: 1 | 2 = i === 0 ? 1 : 2
+      const spawn =
+        i === 0
+          ? this.openSpot(PLAYER_RADIUS + 10)
+          : this.openSpot(PLAYER_RADIUS + 10, this.players[0], 50, 180)
+      this.players.push(this.makePlayer(id, spawn.x, spawn.y, weapon, c, id === 2))
+    })
 
     this.survivors = []
     for (let i = 0; i < mission.survivors; i++) {
-      const spot = this.openSpot(20, this.player, 90, 320)
+      let spot = this.openSpot(20, this.p1, 120, 700)
+      // Keep the walk to extraction long enough to be a real escort.
+      for (let tries = 0; tries < 60; tries++) {
+        if (Math.hypot(spot.x - this.map.extraction.x, spot.y - this.map.extraction.y) > 750) break
+        spot = this.openSpot(20, this.p1, 120, 700)
+      }
       this.survivors.push({
         x: spot.x,
         y: spot.y,
         r: 13,
-        hp: 140,
-        maxHp: 140,
+        hp: SURVIVOR_MAX_HP,
+        maxHp: SURVIVOR_MAX_HP,
         speed: SURVIVOR_SPEED,
         safe: false,
         hurtCooldown: 0,
       })
     }
 
-    this.turret = character.turret
+    const engineer = this.players.find((p) => p.character.turret)
+    this.turret = engineer
       ? {
-          x: this.player.x + 40,
-          y: this.player.y,
+          x: engineer.x + 40,
+          y: engineer.y,
           r: 14,
           angle: 0,
           cooldown: 0,
         }
       : null
-    if (this.turret && circleHitsWall(this.map, this.turret.x, this.turret.y, this.turret.r)) {
-      this.turret.x = this.player.x - 40
+    if (engineer && this.turret && circleHitsWall(this.map, this.turret.x, this.turret.y, this.turret.r)) {
+      this.turret.x = engineer.x - 40
     }
 
     this.setState('playing')
@@ -366,28 +432,35 @@ export class Game {
   private emitHud() {
     const mission = this.mission
     this.onHud({
-      hp: Math.max(0, Math.round(this.player.hp)),
-      maxHp: this.player.maxHp,
-      mag: this.mag,
-      magSize: this.weapon.magSize,
-      reserve: this.reserve,
-      reloading: this.reloadTimer > 0,
+      players: this.players.map((p) => ({
+        id: p.id,
+        name: `Player ${p.id}`,
+        characterName: p.character.name,
+        color: p.character.color,
+        hp: Math.max(0, Math.round(p.hp)),
+        maxHp: p.maxHp,
+        mag: p.mag,
+        magSize: p.weapon.magSize,
+        reserve: p.reserve,
+        reloading: p.reloadTimer > 0,
+        stings: p.stings,
+        lives: p.lives,
+        down: p.down,
+      })),
       kills: this.kills,
       target: mission?.target ?? 0,
       missionName: mission?.name ?? '',
       objective: mission?.objective ?? '',
       mapName: this.map.name,
-      stings: this.stings,
       maxStings: MAX_STINGS,
       weaponName: this.weapon.name,
       perkName: this.weapon.perk === 'none' ? '' : this.weapon.perkName,
       scrap: this.scrapEarned,
-      characterName: this.character.name,
-      lives: this.lives,
       survivors: this.survivors.map((s) => ({
         hp: Math.max(0, Math.round(s.hp)),
         maxHp: s.maxHp,
         safe: s.safe,
+        moving: this.alivePlayers.some((p) => Math.hypot(p.x - s.x, p.y - s.y) < ESCORT_RADIUS),
       })),
       extracted: this.extracted,
       isProtect: mission?.type === 'protect',
@@ -395,8 +468,11 @@ export class Game {
   }
 
   private update(dt: number) {
-    this.updatePlayer(dt)
-    this.updateWeapon(dt)
+    for (const p of this.players) {
+      if (p.down) continue
+      this.updatePlayer(p, dt)
+      this.updateWeapon(p, dt)
+    }
     this.updateBullets(dt)
     this.updateSurvivors(dt)
     this.updateTurret(dt)
@@ -426,21 +502,25 @@ export class Game {
       return
     }
 
-    if (this.stings >= MAX_STINGS) {
-      this.player.hp = 0
-      this.deathCause = 'infection'
-      this.finish('lost')
-    } else if (this.player.hp <= 0) {
-      if (this.lives > 0) {
-        // Medic's field triage: burn a life instead of dying.
-        this.lives -= 1
-        this.player.hp = this.player.maxHp
-        this.player.hurtCooldown = 0.6
-        return
+    for (const p of this.players) {
+      if (p.down) continue
+      const infected = p.stings >= MAX_STINGS
+      if (!infected && p.hp > 0) continue
+      if (p.lives > 0) {
+        // Medic's field triage: burn a life instead of going down.
+        p.lives -= 1
+        p.hp = p.maxHp
+        p.stings = 0
+        p.hurtCooldown = 0.6
+        continue
       }
-      this.deathCause = 'wounds'
-      this.finish('lost')
+      p.hp = 0
+      p.down = true
+      p.shooting = false
+      this.deathCause = infected ? 'infection' : 'wounds'
     }
+
+    if (this.players.length && this.players.every((p) => p.down)) this.finish('lost')
   }
 
   private finish(state: GameState) {
@@ -448,36 +528,76 @@ export class Game {
     this.setState(state)
   }
 
-  private updatePlayer(dt: number) {
+  private updatePlayer(p: Player, dt: number) {
     const k = this.keys
+    const solo = this.players.length === 1
     let dx = 0
     let dy = 0
-    if (k.has('w') || k.has('arrowup')) dy -= 1
-    if (k.has('s') || k.has('arrowdown')) dy += 1
-    if (k.has('a') || k.has('arrowleft')) dx -= 1
-    if (k.has('d') || k.has('arrowright')) dx += 1
+    if (p.id === 1) {
+      if (k.has('w') || (solo && k.has('arrowup'))) dy -= 1
+      if (k.has('s') || (solo && k.has('arrowdown'))) dy += 1
+      if (k.has('a') || (solo && k.has('arrowleft'))) dx -= 1
+      if (k.has('d') || (solo && k.has('arrowright'))) dx += 1
+    } else {
+      if (k.has('arrowup')) dy -= 1
+      if (k.has('arrowdown')) dy += 1
+      if (k.has('arrowleft')) dx -= 1
+      if (k.has('arrowright')) dx += 1
+    }
     if (dx || dy) {
       const len = Math.hypot(dx, dy)
       dx /= len
       dy /= len
     }
-    const p = this.player
     const step = p.speed * dt
     this.moveCircle(p, dx * step, dy * step)
 
-    this.mouseWorld.x = this.mouseScreen.x + this.camera.x
-    this.mouseWorld.y = this.mouseScreen.y + this.camera.y
-    p.angle = Math.atan2(this.mouseWorld.y - p.y, this.mouseWorld.x - p.x)
+    if (p.auto) {
+      const mark = this.nearestEnemyTo(p, 1200)
+      if (mark) p.angle = Math.atan2(mark.y - p.y, mark.x - p.x)
+      // Hold fire unless the target is close and not behind a building.
+      const inRange = mark && Math.hypot(mark.x - p.x, mark.y - p.y) < P2_AUTO_FIRE_RANGE
+      p.shooting = Boolean(inRange && mark && this.hasLineOfSight(p, mark))
+      if (p.mag === 0) this.startReload(p)
+    } else {
+      this.mouseWorld.x = this.mouseScreen.x / this.zoom + this.camera.x
+      this.mouseWorld.y = this.mouseScreen.y / this.zoom + this.camera.y
+      p.angle = Math.atan2(this.mouseWorld.y - p.y, this.mouseWorld.x - p.x)
+    }
     p.hurtCooldown = Math.max(0, p.hurtCooldown - dt)
 
-    const c = this.character
+    const c = p.character
     if (c.regenFraction > 0) {
-      this.safeTimer += dt
-      if (this.safeTimer >= c.regenInterval) {
-        this.safeTimer = 0
+      p.safeTimer += dt
+      if (p.safeTimer >= c.regenInterval) {
+        p.safeTimer = 0
         p.hp = Math.min(p.maxHp, p.hp + p.maxHp * c.regenFraction)
       }
     }
+  }
+
+  private hasLineOfSight(from: { x: number; y: number }, to: { x: number; y: number }): boolean {
+    const dx = to.x - from.x
+    const dy = to.y - from.y
+    const steps = Math.ceil(Math.hypot(dx, dy) / 24)
+    for (let i = 1; i < steps; i++) {
+      const t = i / steps
+      if (circleHitsWall(this.map, from.x + dx * t, from.y + dy * t, 2)) return false
+    }
+    return true
+  }
+
+  private nearestEnemyTo(from: { x: number; y: number }, range: number): Enemy | null {
+    let best: Enemy | null = null
+    let bestD = range
+    for (const e of this.enemies) {
+      const d = Math.hypot(e.x - from.x, e.y - from.y)
+      if (d < bestD) {
+        bestD = d
+        best = e
+      }
+    }
+    return best
   }
 
   private moveCircle(e: { x: number; y: number; r: number }, dx: number, dy: number) {
@@ -492,42 +612,41 @@ export class Game {
     }
   }
 
-  private startReload() {
-    if (this.state !== 'playing') return
-    if (this.reloadTimer > 0 || this.mag === this.weapon.magSize || this.reserve <= 0) return
-    this.reloadTimer = this.weapon.reloadTime * this.character.reloadMultiplier
+  private startReload(p: Player | undefined) {
+    if (this.state !== 'playing' || !p || p.down) return
+    if (p.reloadTimer > 0 || p.mag === p.weapon.magSize || p.reserve <= 0) return
+    p.reloadTimer = p.weapon.reloadTime * p.character.reloadMultiplier
   }
 
-  private updateWeapon(dt: number) {
-    this.fireTimer = Math.max(0, this.fireTimer - dt)
-    if (this.reloadTimer > 0) {
-      this.reloadTimer -= dt
-      if (this.reloadTimer <= 0) {
-        const need = this.weapon.magSize - this.mag
-        const take = Math.min(need, this.reserve)
-        this.mag += take
-        this.reserve -= take
-        this.reloadTimer = 0
+  private updateWeapon(p: Player, dt: number) {
+    p.fireTimer = Math.max(0, p.fireTimer - dt)
+    if (p.reloadTimer > 0) {
+      p.reloadTimer -= dt
+      if (p.reloadTimer <= 0) {
+        const need = p.weapon.magSize - p.mag
+        const take = Math.min(need, p.reserve)
+        p.mag += take
+        p.reserve -= take
+        p.reloadTimer = 0
       }
       return
     }
-    if ((this.shooting || this.queuedShot) && this.fireTimer === 0) {
-      if (this.mag > 0) {
-        this.fire()
-        this.fireTimer = this.weapon.fireInterval
-        this.queuedShot = false
+    if ((p.shooting || p.queuedShot) && p.fireTimer === 0) {
+      if (p.mag > 0) {
+        this.fire(p)
+        p.fireTimer = p.weapon.fireInterval
+        p.queuedShot = false
       } else {
-        this.queuedShot = false
-        this.startReload()
+        p.queuedShot = false
+        this.startReload(p)
       }
     }
   }
 
-  private fire() {
-    const p = this.player
-    const w = this.weapon
-    this.shotsFired += 1
-    const acidShot = w.perk === 'acidic-spray' && this.shotsFired % ACID_SHOT_INTERVAL === 0
+  private fire(p: Player) {
+    const w = p.weapon
+    p.shotsFired += 1
+    const acidShot = w.perk === 'acidic-spray' && p.shotsFired % ACID_SHOT_INTERVAL === 0
 
     for (let i = 0; i < w.pellets; i++) {
       const spread = (Math.random() - 0.5) * w.spread * (w.pellets > 1 ? 2 : 1)
@@ -551,7 +670,7 @@ export class Game {
         hit: new Set<Enemy>(),
       })
     }
-    this.mag -= 1
+    p.mag -= 1
     playShot(w)
   }
 
@@ -633,6 +752,7 @@ export class Game {
 
   private updateSurvivors(dt: number) {
     const exit = this.map.extraction
+    const field = extractionField(this.map, 20)
     for (const s of this.survivors) {
       if (s.safe || s.hp <= 0) continue
       s.hurtCooldown = Math.max(0, s.hurtCooldown - dt)
@@ -644,10 +764,25 @@ export class Game {
         this.extracted += 1
         continue
       }
+
+      const escorted = this.alivePlayers.some(
+        (p) => Math.hypot(p.x - s.x, p.y - s.y) < ESCORT_RADIUS
+      )
+      if (!escorted) continue
+
+      // Follow the pre-computed route field so corners and buildings are
+      // steered around rather than walked into.
+      const flow = flowDirection(field, s.x, s.y) ?? { x: dx / d, y: dy / d }
+      const sep = this.survivorSeparation(s)
+      let ux = flow.x + sep.x
+      let uy = flow.y + sep.y
+      const len = Math.hypot(ux, uy) || 1
+      ux /= len
+      uy /= len
+
       const step = s.speed * dt
-      const base = Math.atan2(dy, dx)
-      // Walk around blocking walls instead of grinding into them.
-      for (const offset of [0, 0.6, -0.6, 1.2, -1.2, 1.9, -1.9, 2.6, -2.6]) {
+      const base = Math.atan2(uy, ux)
+      for (const offset of [0, 0.5, -0.5, 1.1, -1.1, 1.7, -1.7]) {
         const a = base + offset
         const nx = s.x + Math.cos(a) * step
         const ny = s.y + Math.sin(a) * step
@@ -659,29 +794,56 @@ export class Game {
     }
   }
 
-  /** Enemies prefer whichever survivor or the player is closest. */
-  private targetFor(z: Enemy): { x: number; y: number; kind: 'player' | 'survivor'; ref: Survivor | null } {
-    const p = this.player
-    let best: { x: number; y: number; kind: 'player' | 'survivor'; ref: Survivor | null } = {
-      x: p.x,
-      y: p.y,
-      kind: 'player',
-      ref: null,
+  /** Keeps escorted survivors from stacking into one another. */
+  private survivorSeparation(self: Survivor): { x: number; y: number } {
+    let x = 0
+    let y = 0
+    for (const other of this.survivors) {
+      if (other === self || other.safe || other.hp <= 0) continue
+      const dx = self.x - other.x
+      const dy = self.y - other.y
+      const d = Math.hypot(dx, dy)
+      if (d > 0 && d < self.r * 3) {
+        x += dx / d
+        y += dy / d
+      }
     }
-    let bestD = Math.hypot(p.x - z.x, p.y - z.y)
+    return { x: x * 0.6, y: y * 0.6 }
+  }
+
+  /** Enemies prefer whichever survivor or player is closest. */
+  private targetFor(z: Enemy): {
+    x: number
+    y: number
+    survivor: Survivor | null
+    player: Player | null
+  } {
+    let best: { x: number; y: number; survivor: Survivor | null; player: Player | null } = {
+      x: z.x,
+      y: z.y,
+      survivor: null,
+      player: null,
+    }
+    let bestD = Infinity
+    for (const p of this.alivePlayers) {
+      const d = Math.hypot(p.x - z.x, p.y - z.y)
+      if (d < bestD) {
+        bestD = d
+        best = { x: p.x, y: p.y, survivor: null, player: p }
+      }
+    }
     for (const s of this.survivors) {
       if (s.safe || s.hp <= 0) continue
       const d = Math.hypot(s.x - z.x, s.y - z.y)
       if (d < bestD * SURVIVOR_AGGRO_BIAS) {
         bestD = d
-        best = { x: s.x, y: s.y, kind: 'survivor', ref: s }
+        best = { x: s.x, y: s.y, survivor: s, player: null }
       }
     }
     return best
   }
 
   private updateEnemies(dt: number) {
-    const p = this.player
     for (let i = this.enemies.length - 1; i >= 0; i--) {
       const z = this.enemies[i]
       z.wobble += dt
@@ -700,6 +862,7 @@ export class Game {
       z.speed = z.burn > 0 ? z.baseSpeed * BURN_SLOW : z.baseSpeed
 
       const target = this.targetFor(z)
+      if (!target.survivor && !target.player) continue
       const dx = target.x - z.x
       const dy = target.y - z.y
       const d = Math.hypot(dx, dy) || 1
@@ -707,8 +870,8 @@ export class Game {
       const wob = Math.sin(z.wobble * 4) * 0.25
       z.retreat = Math.max(0, z.retreat - dt)
 
-      // Camouflage only hides the player; survivors are spotted normally.
-      const sight = z.vision * (target.kind === 'player' ? this.character.aggroMultiplier : 1)
+      // Camouflage only hides players; survivors are spotted normally.
+      const sight = z.vision * (target.player ? target.player.character.aggroMultiplier : 1)
       z.aware = z.aware ? d < sight * VISION_HYSTERESIS : d < sight
       if (!z.aware) {
         z.driftAngle += (Math.random() - 0.5) * dt * 2
@@ -728,36 +891,37 @@ export class Game {
       this.moveCircle(z, (ux + px) * step, (uy + py) * step)
 
       z.attackCooldown = Math.max(0, z.attackCooldown - dt)
-      const victim = target.ref
-      const reach = z.r + (victim ? victim.r : p.r)
+      const victim = target.survivor
+      const hunted = target.player
+      const reach = z.r + (victim ? victim.r : hunted ? hunted.r : 0)
       if (d < reach && z.attackCooldown === 0) {
         if (victim) {
-          victim.hp -= z.kind === 'bug' ? 8 : 6
+          victim.hp -= z.kind === 'bug' ? SURVIVOR_BUG_DAMAGE : SURVIVOR_ZOMBIE_DAMAGE
           victim.hurtCooldown = 0.25
-          z.attackCooldown = z.kind === 'bug' ? 1.8 : 1.2
+          z.attackCooldown = z.kind === 'bug' ? 1.5 : 0.9
           if (z.kind === 'bug') z.retreat = 0.9
-        } else if (z.kind === 'bug') {
-          this.stings += 1
+        } else if (hunted && z.kind === 'bug') {
+          hunted.stings += 1
           z.attackCooldown = 2.2
           z.retreat = 1.1
-          p.hurtCooldown = 0.25
-          this.safeTimer = 0
-        } else {
-          p.hp -= 8
+          hunted.hurtCooldown = 0.25
+          hunted.safeTimer = 0
+        } else if (hunted) {
+          hunted.hp -= 8
           z.attackCooldown = 0.7
-          p.hurtCooldown = 0.25
-          this.safeTimer = 0
+          hunted.hurtCooldown = 0.25
+          hunted.safeTimer = 0
         }
       }
     }
   }
 
   private updatePickups() {
-    const p = this.player
     for (let i = this.ammoBoxes.length - 1; i >= 0; i--) {
       const a = this.ammoBoxes[i]
-      if (Math.hypot(a.x - p.x, a.y - p.y) < p.r + 14) {
-        this.reserve += a.amount
+      const taker = this.alivePlayers.find((p) => Math.hypot(a.x - p.x, a.y - p.y) < p.r + 14)
+      if (taker) {
+        taker.reserve += a.amount
         this.ammoBoxes.splice(i, 1)
       }
     }
@@ -768,7 +932,7 @@ export class Game {
     if (!mission) return
     const protect = mission.type === 'protect'
     const maxAlive = protect
-      ? 3 + mission.survivors
+      ? 4 + mission.survivors * 2
       : Math.min(14, Math.max(4, Math.ceil(mission.target / 3)))
     if (this.enemies.length >= maxAlive) return
     if (!protect) {
@@ -778,7 +942,7 @@ export class Game {
 
     this.spawnTimer -= dt
     if (this.spawnTimer > 0) return
-    this.spawnTimer = protect ? 2.4 : 0.9
+    this.spawnTimer = protect ? 1.5 : 0.9
 
     const spot = this.spawnPoint()
     if (!spot) return
@@ -830,11 +994,12 @@ export class Game {
 
   private spawnPoint() {
     const m = this.map
-    const p = this.player
+    const players = this.alivePlayers
+    if (!players.length) return null
     for (let i = 0; i < 300; i++) {
       const x = 40 + Math.random() * (m.width - 80)
       const y = 40 + Math.random() * (m.height - 80)
-      const d = Math.hypot(x - p.x, y - p.y)
+      const d = Math.min(...players.map((p) => Math.hypot(x - p.x, y - p.y)))
       if (d < 380 || d > 1300) continue
       if (circleHitsWall(m, x, y, 22)) continue
       return { x, y }
@@ -842,10 +1007,27 @@ export class Game {
     return null
   }
 
+  /** Shared co-op camera: centred between both players, zoomed to fit them. */
   private updateCamera() {
     const m = this.map
-    this.camera.x = clamp(this.player.x - this.viewW / 2, 0, Math.max(0, m.width - this.viewW))
-    this.camera.y = clamp(this.player.y - this.viewH / 2, 0, Math.max(0, m.height - this.viewH))
+    const tracked = this.alivePlayers.length ? this.alivePlayers : this.players
+    if (!tracked.length) return
+
+    const xs = tracked.map((p) => p.x)
+    const ys = tracked.map((p) => p.y)
+    const cx = (Math.min(...xs) + Math.max(...xs)) / 2
+    const cy = (Math.min(...ys) + Math.max(...ys)) / 2
+    const spanX = Math.max(...xs) - Math.min(...xs) + COOP_CAMERA_MARGIN
+    const spanY = Math.max(...ys) - Math.min(...ys) + COOP_CAMERA_MARGIN
+
+    const fit = Math.min(this.viewW / spanX, this.viewH / spanY, 1)
+    const target = clamp(fit, MIN_ZOOM, 1)
+    this.zoom += (target - this.zoom) * 0.08
+
+    const worldW = this.viewW / this.zoom
+    const worldH = this.viewH / this.zoom
+    this.camera.x = clamp(cx - worldW / 2, 0, Math.max(0, m.width - worldW))
+    this.camera.y = clamp(cy - worldH / 2, 0, Math.max(0, m.height - worldH))
   }
 
   private render() {
@@ -854,21 +1036,16 @@ export class Game {
     ctx.fillStyle = '#0b0f0d'
     ctx.fillRect(0, 0, this.viewW, this.viewH)
     ctx.save()
+    ctx.scale(this.zoom, this.zoom)
     ctx.translate(-this.camera.x, -this.camera.y)
 
     ctx.fillStyle = m.color
     ctx.fillRect(0, 0, m.width, m.height)
-    this.drawGrid()
+    this.drawFloor()
     this.drawMapLabel()
     if (this.mission?.type === 'protect') this.drawExtraction()
 
-    ctx.fillStyle = m.wallColor
-    ctx.strokeStyle = m.wallEdge
-    ctx.lineWidth = 3
-    for (const w of m.walls) {
-      ctx.fillRect(w.x, w.y, w.w, w.h)
-      ctx.strokeRect(w.x, w.y, w.w, w.h)
-    }
+    for (const w of m.walls) this.drawStructure(w)
 
     for (const a of this.ammoBoxes) {
       ctx.fillStyle = '#f4c542'
@@ -879,6 +1056,7 @@ export class Game {
     }
 
     for (const s of this.survivors) this.drawSurvivor(s)
+    if (this.mission?.type === 'protect') this.drawSurvivorHealthBars()
     if (this.turret) this.drawTurret(this.turret)
 
     for (const e of this.enemies) {
@@ -899,11 +1077,144 @@ export class Game {
       ctx.stroke()
     }
 
-    this.drawPlayer()
+    for (const p of this.players) this.drawPlayer(p)
     ctx.restore()
 
     this.drawCrosshair()
     this.drawMinimap()
+  }
+
+  /** Floor texture: asphalt seams, warehouse planks, hive veins, camp dirt. */
+  private drawFloor() {
+    const ctx = this.ctx
+    const m = this.map
+    const x0 = Math.max(0, this.camera.x - 200)
+    const y0 = Math.max(0, this.camera.y - 200)
+    const x1 = Math.min(m.width, this.camera.x + this.viewW / this.zoom + 200)
+    const y1 = Math.min(m.height, this.camera.y + this.viewH / this.zoom + 200)
+
+    ctx.save()
+    if (m.floor === 'asphalt') {
+      ctx.fillStyle = 'rgba(255,255,255,0.02)'
+      for (let y = Math.floor(y0 / 60) * 60; y < y1; y += 60) {
+        for (let x = Math.floor(x0 / 90) * 90; x < x1; x += 90) {
+          ctx.fillRect(x + ((y / 60) % 2 ? 45 : 0), y, 86, 56)
+        }
+      }
+      // Road markings down the main avenues.
+      ctx.strokeStyle = 'rgba(240,220,120,0.16)'
+      ctx.lineWidth = 6
+      ctx.setLineDash([40, 34])
+      for (let y = Math.floor(y0 / 520) * 520 + 260; y < y1; y += 520) {
+        ctx.beginPath()
+        ctx.moveTo(x0, y)
+        ctx.lineTo(x1, y)
+        ctx.stroke()
+      }
+      ctx.setLineDash([])
+    } else if (m.floor === 'wood') {
+      ctx.strokeStyle = 'rgba(0,0,0,0.28)'
+      ctx.lineWidth = 2
+      for (let y = Math.floor(y0 / 42) * 42; y < y1; y += 42) {
+        ctx.beginPath()
+        ctx.moveTo(x0, y)
+        ctx.lineTo(x1, y)
+        ctx.stroke()
+      }
+      ctx.fillStyle = 'rgba(255,255,255,0.03)'
+      for (let y = Math.floor(y0 / 42) * 42; y < y1; y += 42) {
+        for (let x = Math.floor(x0 / 180) * 180 + ((y / 42) % 2 ? 90 : 0); x < x1; x += 180) {
+          ctx.fillRect(x, y + 3, 176, 36)
+        }
+      }
+    } else if (m.floor === 'organic') {
+      ctx.strokeStyle = 'rgba(224,163,255,0.12)'
+      ctx.lineWidth = 3
+      for (let y = Math.floor(y0 / 140) * 140; y < y1; y += 140) {
+        ctx.beginPath()
+        for (let x = x0; x < x1; x += 40) {
+          ctx.lineTo(x, y + Math.sin(x / 90 + y) * 18)
+        }
+        ctx.stroke()
+      }
+    } else {
+      ctx.fillStyle = 'rgba(0,0,0,0.16)'
+      for (let y = Math.floor(y0 / 70) * 70; y < y1; y += 70) {
+        for (let x = Math.floor(x0 / 70) * 70; x < x1; x += 70) {
+          const r = ((x * 31 + y * 17) % 9) + 3
+          ctx.beginPath()
+          ctx.ellipse(x + 20, y + 30, r, r * 0.6, 0, 0, Math.PI * 2)
+          ctx.fill()
+        }
+      }
+    }
+    ctx.restore()
+  }
+
+  /** Buildings get brick courses, window grids and a rooftop cap. */
+  private drawStructure(w: Rect) {
+    const ctx = this.ctx
+    const m = this.map
+    ctx.save()
+    ctx.fillStyle = m.wallColor
+    ctx.fillRect(w.x, w.y, w.w, w.h)
+
+    if (w.kind !== 'barrier') {
+      ctx.beginPath()
+      ctx.rect(w.x, w.y, w.w, w.h)
+      ctx.clip()
+
+      ctx.strokeStyle = 'rgba(0,0,0,0.22)'
+      ctx.lineWidth = 1.5
+      for (let y = w.y + 14; y < w.y + w.h; y += 14) {
+        ctx.beginPath()
+        ctx.moveTo(w.x, y)
+        ctx.lineTo(w.x + w.w, y)
+        ctx.stroke()
+      }
+      let row = 0
+      for (let y = w.y; y < w.y + w.h; y += 14, row++) {
+        for (let x = w.x + (row % 2 ? 0 : 14); x < w.x + w.w; x += 28) {
+          ctx.beginPath()
+          ctx.moveTo(x, y)
+          ctx.lineTo(x, y + 14)
+          ctx.stroke()
+        }
+      }
+
+      // Window grid with a couple of lit panes.
+      const stepX = 42
+      const stepY = 46
+      for (let y = w.y + 20; y < w.y + w.h - 22; y += stepY) {
+        for (let x = w.x + 18; x < w.x + w.w - 20; x += stepX) {
+          const lit = ((x * 7 + y * 13) % 11) < 3
+          ctx.fillStyle = lit ? 'rgba(255,212,121,0.5)' : 'rgba(15,23,32,0.72)'
+          ctx.fillRect(x, y, 22, 24)
+          ctx.strokeStyle = 'rgba(0,0,0,0.45)'
+          ctx.lineWidth = 2
+          ctx.strokeRect(x, y, 22, 24)
+          ctx.beginPath()
+          ctx.moveTo(x + 11, y)
+          ctx.lineTo(x + 11, y + 24)
+          ctx.moveTo(x, y + 12)
+          ctx.lineTo(x + 22, y + 12)
+          ctx.stroke()
+        }
+      }
+
+      // Rooftop lip and vents.
+      ctx.fillStyle = 'rgba(0,0,0,0.3)'
+      ctx.fillRect(w.x, w.y, w.w, 10)
+      ctx.fillStyle = 'rgba(255,255,255,0.08)'
+      for (let x = w.x + 24; x < w.x + w.w - 20; x += 96) {
+        ctx.fillRect(x, w.y + 2, 26, 6)
+      }
+    }
+
+    ctx.restore()
+    ctx.strokeStyle = m.wallEdge
+    ctx.lineWidth = 3
+    ctx.strokeRect(w.x, w.y, w.w, w.h)
   }
 
   private drawExtraction() {
@@ -936,7 +1247,14 @@ export class Game {
     ctx.strokeStyle = '#0f172a'
     ctx.lineWidth = 2
     ctx.stroke()
+  }
 
+  private drawSurvivorHealthBars() {
+    for (const s of this.survivors) this.drawSurvivorHealthBar(s)
+  }
+
+  private drawSurvivorHealthBar(s: Survivor) {
+    const ctx = this.ctx
     const bw = 40
     const bh = 6
     const bx = s.x - bw / 2
@@ -1019,24 +1337,6 @@ export class Game {
     ctx.restore()
   }
 
-  private drawGrid() {
-    const ctx = this.ctx
-    ctx.strokeStyle = 'rgba(255,255,255,0.04)'
-    ctx.lineWidth = 1
-    const startX = Math.floor(this.camera.x / 100) * 100
-    const startY = Math.floor(this.camera.y / 100) * 100
-    ctx.beginPath()
-    for (let x = startX; x < this.camera.x + this.viewW + 100; x += 100) {
-      ctx.moveTo(x, this.camera.y)
-      ctx.lineTo(x, this.camera.y + this.viewH)
-    }
-    for (let y = startY; y < this.camera.y + this.viewH + 100; y += 100) {
-      ctx.moveTo(this.camera.x, y)
-      ctx.lineTo(this.camera.x + this.viewW, y)
-    }
-    ctx.stroke()
-  }
-
   private drawMapLabel() {
     const ctx = this.ctx
     const m = this.map
@@ -1048,28 +1348,52 @@ export class Game {
     ctx.textAlign = 'left'
   }
 
-  private drawPlayer() {
+  private drawPlayer(p: Player) {
     const ctx = this.ctx
-    const p = this.player
-    ctx.beginPath()
-    ctx.arc(p.x, p.y, p.r, 0, Math.PI * 2)
-    ctx.fillStyle = p.hurtCooldown > 0 ? '#ff8a8a' : this.character.color
-    ctx.fill()
-    ctx.strokeStyle = '#14532d'
-    ctx.lineWidth = 3
-    ctx.stroke()
-
     ctx.save()
     ctx.translate(p.x, p.y)
+    if (p.down) ctx.globalAlpha = 0.4
+
+    ctx.save()
     ctx.rotate(p.angle)
     ctx.fillStyle = '#e5e7eb'
     ctx.fillRect(p.r - 4, -4, 22, 8)
+    ctx.restore()
+
+    drawCharacterSkin(ctx, p.character.id, p.r, p.angle, p.hurtCooldown > 0)
+
+    if (this.players.length > 1) {
+      ctx.fillStyle = p.id === 1 ? '#34d399' : '#60a5fa'
+      ctx.font = 'bold 12px ui-sans-serif, system-ui, sans-serif'
+      ctx.textAlign = 'center'
+      ctx.fillText(p.down ? `P${p.id} DOWN` : `P${p.id}`, 0, -p.r - 8)
+      ctx.textAlign = 'left'
+    }
     ctx.restore()
   }
 
   private drawCrosshair() {
     if (this.state !== 'playing') return
     const ctx = this.ctx
+
+    const p2 = this.players[1]
+    if (p2 && !p2.down) {
+      // Show where player 2's auto-aim is pointing.
+      const len = 70
+      ctx.save()
+      ctx.scale(this.zoom, this.zoom)
+      ctx.translate(-this.camera.x, -this.camera.y)
+      ctx.strokeStyle = 'rgba(96,165,250,0.55)'
+      ctx.lineWidth = 2
+      ctx.setLineDash([8, 8])
+      ctx.beginPath()
+      ctx.moveTo(p2.x, p2.y)
+      ctx.lineTo(p2.x + Math.cos(p2.angle) * len, p2.y + Math.sin(p2.angle) * len)
+      ctx.stroke()
+      ctx.setLineDash([])
+      ctx.restore()
+    }
+
     const { x, y } = this.mouseScreen
     ctx.strokeStyle = 'rgba(255,255,255,0.8)'
     ctx.lineWidth = 2
@@ -1140,10 +1464,15 @@ export class Game {
       ctx.fill()
     }
 
-    ctx.fillStyle = this.character.color
-    ctx.beginPath()
-    ctx.arc(mx + this.player.x * s, my + this.player.y * s, 4, 0, Math.PI * 2)
-    ctx.fill()
+    for (const p of this.players) {
+      ctx.fillStyle = p.down ? '#64748b' : p.character.color
+      ctx.beginPath()
+      ctx.arc(mx + p.x * s, my + p.y * s, 4, 0, Math.PI * 2)
+      ctx.fill()
+      ctx.strokeStyle = p.id === 1 ? '#34d399' : '#60a5fa'
+      ctx.lineWidth = 1.5
+      ctx.stroke()
+    }
 
     ctx.font = '11px ui-sans-serif, system-ui, sans-serif'
     ctx.fillStyle = 'rgba(255,255,255,0.7)'

@@ -12,6 +12,10 @@ export interface Profile {
   owned: WeaponId[]
   equipped: WeaponId
   character: CharacterId | null
+  /** Second local player's character, used in 2-player co-op. */
+  character2: CharacterId | null
+  /** Local players sharing the screen. */
+  players: 1 | 2
   /** Mission ids already cleared. */
   completed: string[]
   /** Campaign branch the player committed to. */
@@ -23,6 +27,8 @@ const DEFAULT_PROFILE: Profile = {
   owned: [...STARTER_WEAPONS],
   equipped: STARTER_WEAPONS[0],
   character: null,
+  character2: null,
+  players: 1,
   completed: [],
   path: null,
 }
@@ -62,6 +68,8 @@ export function loadProfile(): Profile {
       owned,
       equipped,
       character: isCharacterId(record.character) ? record.character : null,
+      character2: isCharacterId(record.character2) ? record.character2 : null,
+      players: record.players === 2 ? 2 : 1,
       completed: Array.isArray(record.completed) ? record.completed.filter(isMissionId) : [],
       path: isPathId(record.path) ? record.path : null,
     }

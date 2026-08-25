@@ -1,11 +1,18 @@
+export type StructureKind = 'building' | 'barrier'
+
 export interface Rect {
   x: number
   y: number
   w: number
   h: number
+  /** Buildings get brickwork and windows; barriers are plain map edges. */
+  kind?: StructureKind
 }
 
 export type MapId = 'streets' | 'warehouse' | 'hive' | 'refuge'
+
+/** Ground texture painted under everything else. */
+export type FloorStyle = 'asphalt' | 'wood' | 'organic' | 'dirt'
 
 export interface GameMap {
   id: MapId
@@ -16,6 +23,9 @@ export interface GameMap {
   color: string
   wallColor: string
   wallEdge: string
+  floor: FloorStyle
+  /** Accent used for roofs, window glow and floor detailing. */
+  accent: string
   walls: Rect[]
   /** Where escorted survivors run to. */
   extraction: { x: number; y: number }
@@ -25,10 +35,10 @@ const BORDER = 30
 
 function border(width: number, height: number): Rect[] {
   return [
-    { x: 0, y: 0, w: width, h: BORDER },
-    { x: 0, y: height - BORDER, w: width, h: BORDER },
-    { x: 0, y: 0, w: BORDER, h: height },
-    { x: width - BORDER, y: 0, w: BORDER, h: height },
+    { x: 0, y: 0, w: width, h: BORDER, kind: 'barrier' },
+    { x: 0, y: height - BORDER, w: width, h: BORDER, kind: 'barrier' },
+    { x: 0, y: 0, w: BORDER, h: height, kind: 'barrier' },
+    { x: width - BORDER, y: 0, w: BORDER, h: height, kind: 'barrier' },
   ]
 }
 
@@ -37,9 +47,11 @@ const STREETS: GameMap = {
   name: 'The Streets',
   width: 1900,
   height: 1500,
-  color: '#2b3230',
+  color: '#23262a',
   wallColor: '#8b5a2b',
   wallEdge: '#5c3a1c',
+  floor: 'asphalt',
+  accent: '#ffd479',
   extraction: { x: 1740, y: 750 },
   walls: [
     ...border(1900, 1500),
@@ -60,9 +72,11 @@ const WAREHOUSE: GameMap = {
   name: 'The Warehouse',
   width: 1700,
   height: 1400,
-  color: '#33291f',
+  color: '#3a2d20',
   wallColor: '#9a6a34',
   wallEdge: '#63421d',
+  floor: 'wood',
+  accent: '#ffcf8a',
   extraction: { x: 1540, y: 700 },
   walls: [
     ...border(1700, 1400),
@@ -87,6 +101,8 @@ const HIVE: GameMap = {
   color: '#241a2b',
   wallColor: '#6d3f7a',
   wallEdge: '#3f2049',
+  floor: 'organic',
+  accent: '#e0a3ff',
   extraction: { x: 1620, y: 1440 },
   walls: [
     ...border(1800, 1600),
@@ -111,6 +127,8 @@ const REFUGE: GameMap = {
   color: '#1c3326',
   wallColor: '#7c6a3f',
   wallEdge: '#4d4126',
+  floor: 'dirt',
+  accent: '#ffe3a3',
   extraction: { x: 1620, y: 200 },
   walls: [
     ...border(1800, 1400),
