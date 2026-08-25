@@ -118,7 +118,7 @@ function bossDialogue(id: CharacterId): Line[] {
   return [
     {
       speaker: 'Survivor 1',
-      text: "It's suicide going in there... The entire district has become a feeding ground.",
+      text: "It's suicide going in there... The entire district has become a feeding ground. The air is thick with venom.",
       side: 'right',
     },
     {
@@ -128,12 +128,17 @@ function bossDialogue(id: CharacterId): Line[] {
     },
     {
       speaker: 'Survivor 2',
-      text: "They say it's not a normal insect. It's a massive, multi-winged abomination. Protect us, please!",
+      text: "They say it's not a normal insect. It's a massive, multi-winged abomination. It absorbed the DNA of the first fallen researchers. It controls the local horde like a hive mind!",
+      side: 'right',
+    },
+    {
+      speaker: 'Survivor 1',
+      text: 'If you fail, the remaining safe zones drop within 24 hours. The swarm is already gathering outside our perimeter.',
       side: 'right',
     },
     {
       speaker: hero,
-      text: "Lock the doors and hold this line. We're going to put an end to this swarm once and for all.",
+      text: "Lock the doors, distribute the remaining ammo, and hold this line at all costs. We're going to pull the plug on this swarm right now. Watch the skies.",
       side: 'left',
     },
   ]

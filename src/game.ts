@@ -293,7 +293,8 @@ const RUNNER_HP_FRACTION = 0.4
 const CAMO_REVEAL_RANGE = 130
 /** Distance at which a camo zombie starts mimicking a nearby survivor. */
 const CAMO_MIMIC_RANGE = 260
-const MUTATION_INTERVAL = 45
+/** Mutations roll 40% more often than the original 45s cadence. */
+const MUTATION_INTERVAL = 32
 const MUTATION_DURATION = 20
 const MUTATION_ALERT_TIME = 4
 const MUTATION_SPEED = 1.25
@@ -347,20 +348,23 @@ const BARRICADE_HP = 260
 const BARRICADE_W = 130
 const BARRICADE_H = 26
 const BOSS_NAME = 'The Hive Mother'
-const BOSS_MAX_HP = 1800
+const BOSS_MAX_HP = 2340
 const BOSS_RADIUS = 62
 const BOSS_SPEED = 62
 const BOSS_ENRAGE_SPEED = 1.3
 const BOSS_RING_INTERVAL = 3.4
 const BOSS_RING_SHOTS = 12
 const BOSS_BROOD_INTERVAL = 6
-const BOSS_BROOD_MAX = 8
-const BOSS_DASH_INTERVAL = 8
+const BOSS_BROOD_MAX = 16
+/** Bugs hatched per brood wave. */
+const BOSS_BROOD_COUNT = 2
+const BOSS_DASH_INTERVAL = 5
 const BOSS_DASH_TIME = 0.75
 const BOSS_DASH_SPEED = 640
 const BOSS_CONTACT_DAMAGE = 22
 const VENOM_SPEED = 210
 const VENOM_LIFE = 3
+const VENOM_DAMAGE = 6.5
 /** How close a player must get to the hive centre to trigger the reveal. */
 const BOSS_REVEAL_RANGE = 320
 const BOSS_REVEAL_TIME = 3.6
@@ -1312,7 +1316,7 @@ export class Game {
 
   /**
    * Phase 1 stalks the nearest player, spitting venom rings and hatching
-   * brood. Below half health she enrages: faster, and charging every 8s.
+   * brood. Below half health she enrages: faster, and charging every 5s.
    */
   private updateBoss(dt: number) {
     const b = this.boss
@@ -1343,7 +1347,8 @@ export class Game {
     b.broodTimer -= dt
     if (b.broodTimer <= 0) {
       b.broodTimer = BOSS_BROOD_INTERVAL
-      if (this.enemies.length < BOSS_BROOD_MAX) {
+      for (let i = 0; i < BOSS_BROOD_COUNT; i++) {
+        if (this.enemies.length >= BOSS_BROOD_MAX) break
         const spot = this.openSpot(12, b, 80, 220)
         this.enemies.push(this.makeBug(spot))
       }
@@ -1397,7 +1402,7 @@ export class Game {
           if (Math.hypot(p.x - v.x, p.y - v.y) > p.r + v.r) continue
           // Venom is a sting: it feeds the infection meter, not just health.
           p.stings += 1
-          p.hp -= 5
+          p.hp -= VENOM_DAMAGE
           p.hurtCooldown = 1.2
           p.safeTimer = 0
           playSfx('sting')

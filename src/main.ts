@@ -104,7 +104,6 @@ app.innerHTML = `
         <button id="start-btn" class="rounded-xl bg-emerald-500 px-10 py-3 text-lg font-black tracking-wide text-emerald-950 hover:bg-emerald-400">Start Game</button>
       </div>
       <div class="mt-4 flex flex-wrap justify-center gap-3">
-        <button id="lore-btn" class="rounded-lg bg-orange-500/15 px-6 py-2 text-sm font-bold text-orange-300 ring-1 ring-orange-400/40 hover:bg-orange-500/25">Lore / Story</button>
         <button id="shop-btn" class="rounded-lg bg-yellow-500/15 px-6 py-2 text-sm font-bold text-yellow-300 ring-1 ring-yellow-400/40 hover:bg-yellow-500/25">Weapons Shop</button>
         <button id="locker-btn" class="rounded-lg bg-sky-500/15 px-6 py-2 text-sm font-bold text-sky-300 ring-1 ring-sky-400/40 hover:bg-sky-500/25">Locker</button>
         <button id="textures-btn" class="rounded-lg bg-violet-500/15 px-6 py-2 text-sm font-bold text-violet-300 ring-1 ring-violet-400/40 hover:bg-violet-500/25">Texture Pack</button>
@@ -128,16 +127,6 @@ app.innerHTML = `
         <span class="font-semibold text-orange-300">Orange Plague Bugs</span> are fast and sting — five stings and you turn.
         <div class="mt-2"><span class="font-semibold text-slate-200">Co-op:</span> Player 2 moves with the Arrow keys, auto-aims at the nearest enemy and fires on its own or with the <span class="font-mono text-slate-200">.</span> key. Their ability is <span class="font-mono text-slate-200">M</span> (barricade <span class="font-mono text-slate-200">,</span>).</div>
       </div>
-    </div>
-  </div>
-
-  <!-- Lore -->
-  <div id="lore" class="absolute inset-0 z-10 hidden items-center justify-center bg-slate-950/95 p-6">
-    <div class="w-full max-w-2xl rounded-2xl bg-white/5 p-8 ring-1 ring-orange-400/30">
-      <h2 class="text-3xl font-black tracking-tight text-orange-400">THE STORY</h2>
-      <p class="mt-5 text-lg leading-relaxed text-slate-200">A mysterious plague has wiped out humanity. The virus doesn't spread by bites&mdash;it spreads from the skies. A mutated species of giant flying bugs carries the infection. Getting stung too many times injects enough venom to kill you and instantly turn you into a zombie.</p>
-      <p class="mt-4 text-sm text-slate-400">Plague Bugs are small orange fliers, 1.5x faster than a zombie. Five stings is lethal &mdash; shoot them first.</p>
-      <button id="lore-close" class="mt-8 rounded-lg bg-orange-500 px-8 py-3 text-lg font-bold text-orange-950 hover:bg-orange-400">Back to Menu</button>
     </div>
   </div>
 
@@ -222,7 +211,6 @@ const hud = el('hud')
 const menu = el('menu')
 const winScreen = el('win')
 const loseScreen = el('lose')
-const loreScreen = el('lore')
 const arsenalScreen = el('arsenal')
 const characterScreen = el('characters')
 const introScreen = el('intro')
@@ -375,14 +363,8 @@ function renderIntro() {
     `
     card.addEventListener('click', () => {
       resumeAudio()
-      const firstBoot = !profile.textures
       setTextures(pack.id)
       show(introScreen, false)
-      // First boot runs the lore cinematic before the survivor is picked.
-      if (firstBoot) {
-        startGameFlow()
-        return
-      }
       if (profile.character) show(menu, true)
       else show(characterScreen, true)
       playMusic('menu')
@@ -733,7 +715,6 @@ game.onStateChange = (state: GameState) => {
   show(winScreen, state === 'won')
   show(loseScreen, state === 'lost')
   if (state !== 'menu') {
-    show(loreScreen, false)
     show(arsenalScreen, false)
     show(characterScreen, false)
   }
@@ -999,14 +980,6 @@ game.onHud = (h: Hud) => {
 }
 
 el('start-btn').addEventListener('click', startGameFlow)
-el('lore-btn').addEventListener('click', () => {
-  show(menu, false)
-  show(loreScreen, true)
-})
-el('lore-close').addEventListener('click', () => {
-  show(loreScreen, false)
-  show(menu, true)
-})
 
 el('win-btn').addEventListener('click', () => game.toMenu())
 el('lose-menu-btn').addEventListener('click', () => game.toMenu())
@@ -1023,10 +996,14 @@ renderIntro()
 game.textures = profile.textures ?? 'classic'
 game.onStateChange('menu')
 stopMusic()
-if (!profile.textures) {
-  show(menu, false)
-  show(introScreen, true)
-} else if (!profile.character) {
-  show(menu, false)
-  show(characterScreen, true)
-}
+// Every page load opens on the lore crawl before any menu is shown.
+show(menu, false)
+playStoryIntro(() => {
+  if (!profile.textures) {
+    show(introScreen, true)
+  } else if (!profile.character) {
+    show(characterScreen, true)
+  } else {
+    show(menu, true)
+  }
+})
