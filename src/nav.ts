@@ -35,7 +35,20 @@ function passable(map: GameMap, cx: number, cy: number, clearance: number) {
 export function extractionField(map: GameMap, clearance: number): FlowField {
   const cached = cache.get(map.id)
   if (cached) return cached
+  const field = goalField(map, clearance, [map.extraction])
+  cache.set(map.id, field)
+  return field
+}
 
+/**
+ * Same breadth-first field, but flowing to an arbitrary point — enemies use one
+ * aimed at the player so they round corners instead of pressing into walls.
+ */
+export function goalField(
+  map: GameMap,
+  clearance: number,
+  goals: { x: number; y: number }[]
+): FlowField {
   const cols = Math.ceil(map.width / CELL)
   const rows = Math.ceil(map.height / CELL)
   const field: FlowField = { cols, rows, cell: CELL, dist: new Int32Array(cols * rows).fill(UNREACHABLE) }
@@ -47,14 +60,15 @@ export function extractionField(map: GameMap, clearance: number): FlowField {
     }
   }
 
-  const goal = nearestOpenCell(field, open, map.extraction.x, map.extraction.y)
-  if (goal < 0) {
-    cache.set(map.id, field)
-    return field
+  const queue: number[] = []
+  for (const g of goals) {
+    const goal = nearestOpenCell(field, open, g.x, g.y)
+    if (goal < 0 || field.dist[goal] === 0) continue
+    field.dist[goal] = 0
+    queue.push(goal)
   }
+  if (!queue.length) return field
 
-  field.dist[goal] = 0
-  const queue: number[] = [goal]
   for (let head = 0; head < queue.length; head++) {
     const at = queue[head]
     const cx = at % cols
@@ -76,7 +90,6 @@ export function extractionField(map: GameMap, clearance: number): FlowField {
     }
   }
 
-  cache.set(map.id, field)
   return field
 }
 

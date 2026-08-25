@@ -33,6 +33,11 @@ export interface GameMap {
 
 const BORDER = 30
 
+/** Interior walls: flat partitions rather than windowed exterior buildings. */
+function partitions(rects: Omit<Rect, 'kind'>[]): Rect[] {
+  return rects.map((r) => ({ ...r, kind: 'barrier' as const }))
+}
+
 function border(width: number, height: number): Rect[] {
   return [
     { x: 0, y: 0, w: width, h: BORDER, kind: 'barrier' },
@@ -78,18 +83,46 @@ const WAREHOUSE: GameMap = {
   floor: 'wood',
   accent: '#ffcf8a',
   extraction: { x: 1540, y: 700 },
+  // Four storage rooms around a cross of hallways; every room has a doorway.
   walls: [
     ...border(1700, 1400),
-    { x: 220, y: 200, w: 620, h: 55 },
-    { x: 980, y: 200, w: 480, h: 55 },
-    { x: 220, y: 460, w: 480, h: 55 },
-    { x: 860, y: 460, w: 600, h: 55 },
-    { x: 220, y: 720, w: 620, h: 55 },
-    { x: 1000, y: 720, w: 460, h: 55 },
-    { x: 220, y: 980, w: 480, h: 55 },
-    { x: 860, y: 980, w: 600, h: 55 },
-    { x: 820, y: 240, w: 55, h: 220 },
-    { x: 820, y: 760, w: 55, h: 220 },
+    ...partitions([
+      // Spine between the west and east rooms, broken by hallway openings.
+      { x: 780, y: 120, w: 40, h: 240 },
+      { x: 780, y: 440, w: 40, h: 200 },
+      { x: 780, y: 760, w: 40, h: 210 },
+      { x: 780, y: 1060, w: 40, h: 220 },
+
+      // Room walls north of the east–west hallway.
+      { x: 120, y: 600, w: 300, h: 40 },
+      { x: 520, y: 600, w: 260, h: 40 },
+      { x: 820, y: 600, w: 300, h: 40 },
+      { x: 1240, y: 600, w: 340, h: 40 },
+
+      // Room walls south of it.
+      { x: 120, y: 760, w: 260, h: 40 },
+      { x: 480, y: 760, w: 300, h: 40 },
+      { x: 820, y: 760, w: 340, h: 40 },
+      { x: 1260, y: 760, w: 320, h: 40 },
+
+      // Partitions that turn each room into short aisles.
+      { x: 300, y: 180, w: 40, h: 280 },
+      { x: 340, y: 180, w: 220, h: 40 },
+      { x: 1160, y: 180, w: 40, h: 300 },
+      { x: 940, y: 440, w: 260, h: 40 },
+      { x: 300, y: 940, w: 40, h: 260 },
+      { x: 340, y: 940, w: 240, h: 40 },
+      { x: 1160, y: 920, w: 40, h: 300 },
+      { x: 940, y: 1180, w: 260, h: 40 },
+
+      // Loose crates for cover — square footprints, not aisle-length shelving.
+      { x: 560, y: 320, w: 70, h: 70 },
+      { x: 1000, y: 250, w: 70, h: 70 },
+      { x: 620, y: 1000, w: 70, h: 70 },
+      { x: 1320, y: 1030, w: 70, h: 70 },
+      { x: 1380, y: 300, w: 70, h: 70 },
+      { x: 200, y: 1280, w: 70, h: 70 },
+    ]),
   ],
 }
 

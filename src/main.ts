@@ -13,6 +13,13 @@ import { TEXTURE_PACKS } from './theme'
 import type { TexturePack } from './theme'
 import { playMusic, resumeAudio, stopMusic } from './audio'
 
+declare global {
+  interface Window {
+    /** Dev-only handle so smoke tests can read entity positions. */
+    game?: Game
+  }
+}
+
 const app = document.querySelector<HTMLDivElement>('#app')
 if (!app) throw new Error('#app container missing')
 
@@ -209,6 +216,7 @@ const characterScreen = el('characters')
 const introScreen = el('intro')
 
 const game = new Game(canvas)
+if (import.meta.env.DEV) window.game = game
 const profile = loadProfile()
 const radar = new RadarChart(el<HTMLCanvasElement>('radar'), 280)
 

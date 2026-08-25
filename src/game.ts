@@ -6,10 +6,11 @@ import { characterById } from './characters'
 import { SCRAP_PER_BUG, SCRAP_PER_KILL } from './profile'
 import { playMusic, playSfx, playShot } from './audio'
 import type { TexturePack } from './theme'
-import { BUILDING_HEIGHT, UNIT_LIFT } from './theme'
+import { BUILDING_HEIGHT, MAX_BUILDING_LIFT, UNIT_LIFT } from './theme'
 import type { GameMap, Rect } from './maps'
 import { circleHitsWall, mapById } from './maps'
-import { extractionField, flowDirection } from './nav'
+import { extractionField, flowDirection, goalField } from './nav'
+import type { FlowField } from './nav'
 import { drawCharacterSkin } from './skins'
 import { bindInput, clearInput, keysPressed } from './input'
 
@@ -236,6 +237,10 @@ const ZOMBIE_VISION = 620
 const BUG_VISION = 780
 /** Awareness is kept until the player breaks well past the spotting range. */
 const VISION_HYSTERESIS = 1.5
+/** Wall clearance used when routing enemies around structures. */
+const ENEMY_CLEARANCE = 14
+/** Seconds between rebuilds of the enemy route field. */
+const CHASE_FIELD_INTERVAL = 0.4
 const MAX_STINGS = 5
 const POISON_DURATION = 3
 const POISON_DPS = 14
@@ -313,6 +318,9 @@ export class Game {
   private venom: Projectile[] = []
   private groanTimer = 2
   private barricades: Barricade[] = []
+  /** Route field to the nearest player or survivor, rebuilt periodically. */
+  private chaseField: FlowField | null = null
+  private chaseTimer = 0
 
   private spawnTimer = 0
   private spawned = 0
@@ -388,6 +396,20 @@ export class Game {
     return this.players.filter((p) => !p.down)
   }
 
+  /** Position snapshot used by the automated movement smoke tests. */
+  debugState() {
+    return {
+      map: this.map.id,
+      players: this.players.map((p) => ({ x: Math.round(p.x), y: Math.round(p.y) })),
+      enemies: this.enemies.map((e) => ({
+        x: Math.round(e.x),
+        y: Math.round(e.y),
+        kind: e.kind,
+        aware: e.aware,
+      })),
+    }
+  }
+
   private bindInput() {
     bindInput(this.canvas, {
       reload: () => this.startReload(this.p1),
@@ -448,15 +470,19 @@ export class Game {
     this.venom = []
     this.boss = null
     this.groanTimer = 2
+    this.chaseField = null
+    this.chaseTimer = 0
     this.zoom = 1
     this.runAndGunChecked = false
 
     this.players = []
     characters.slice(0, 2).forEach((c, i) => {
       const id: 1 | 2 = i === 0 ? 1 : 2
+      // Player 1 starts near the middle of the map, not pinned to an edge.
+      const centre = { x: this.map.width / 2, y: this.map.height / 2 }
       const spawn =
         i === 0
-          ? this.openSpot(PLAYER_RADIUS + 10)
+          ? this.openSpot(PLAYER_RADIUS + 10, centre, 0, 420)
           : this.openSpot(PLAYER_RADIUS + 10, this.players[0], 50, 180)
       this.players.push(this.makePlayer(id, spawn.x, spawn.y, weapon, c, id === 2))
     })
@@ -1281,7 +1307,18 @@ export class Game {
     return best
   }
 
+  /** Refreshes the shared route field enemies follow when a wall blocks them. */
+  private updateChaseField(dt: number) {
+    this.chaseTimer -= dt
+    if (this.chaseField && this.chaseTimer > 0) return
+    const goals: { x: number; y: number }[] = this.alivePlayers.filter((p) => !this.isCloaked(p))
+    for (const s of this.survivors) if (!s.safe && s.hp > 0) goals.push(s)
+    this.chaseField = goals.length ? goalField(this.map, ENEMY_CLEARANCE, goals) : null
+    this.chaseTimer = CHASE_FIELD_INTERVAL
+  }
+
   private updateEnemies(dt: number) {
+    this.updateChaseField(dt)
     for (let i = this.enemies.length - 1; i >= 0; i--) {
       const z = this.enemies[i]
       z.wobble += dt
@@ -1321,9 +1358,20 @@ export class Game {
         continue
       }
 
+      // Walk straight when the target is visible, otherwise follow the route
+      // field so walls are rounded instead of pressed into.
+      let hx = dx / d
+      let hy = dy / d
+      if (this.chaseField && d > z.r + 8 && !this.hasLineOfSight(z, target)) {
+        const flow = flowDirection(this.chaseField, z.x, z.y)
+        if (flow) {
+          hx = flow.x
+          hy = flow.y
+        }
+      }
       const dir = z.retreat > 0 ? -1 : 1
-      const ux = (dx / d) * dir
-      const uy = (dy / d) * dir
+      const ux = hx * dir
+      const uy = hy * dir
       const px = -uy * wob
       const py = ux * wob
       this.moveEnemy(z, (ux + px) * step, (uy + py) * step)
@@ -1708,12 +1756,17 @@ export class Game {
     }
     const cx = this.camera.x + this.viewW / (2 * this.zoom)
     const cy = this.camera.y + this.viewH / (2 * this.zoom)
-    const k = BUILDING_HEIGHT
+    // Slide the roof away from the view centre by a small, clamped amount: a
+    // proportional extrusion detaches distant blocks and reads as platforms.
+    const dx = w.x + w.w / 2 - cx
+    const dy = w.y + w.h / 2 - cy
+    const dist = Math.hypot(dx, dy) || 1
+    const lift = Math.min(dist * BUILDING_HEIGHT, MAX_BUILDING_LIFT)
     const top: Rect = {
-      x: cx + (w.x - cx) * (1 + k),
-      y: cy + (w.y - cy) * (1 + k),
-      w: w.w * (1 + k),
-      h: w.h * (1 + k),
+      x: w.x + (dx / dist) * lift,
+      y: w.y + (dy / dist) * lift,
+      w: w.w,
+      h: w.h,
       kind: w.kind,
     }
 
