@@ -3,14 +3,17 @@ import { CHARACTERS } from './characters'
 import { MISSIONS } from './missions'
 import type { TexturePack } from './theme'
 import type { WeaponId } from './weapons'
-import { STARTER_WEAPONS, WEAPONS } from './weapons'
+import { STARTER_WEAPONS, WEAPONS, weaponById } from './weapons'
 
 const STORAGE_KEY = 'zombie-shooter-profile-v1'
 
 export interface Profile {
   scrap: number
   owned: WeaponId[]
-  equipped: WeaponId
+  /** Heavy firearm carried in the primary slot. */
+  primary: WeaponId
+  /** Sidearm or melee weapon carried in the secondary slot. */
+  secondary: WeaponId
   character: CharacterId | null
   /** Second local player's character, used in 2-player co-op. */
   character2: CharacterId | null
@@ -25,7 +28,8 @@ export interface Profile {
 const DEFAULT_PROFILE: Profile = {
   scrap: 0,
   owned: [...STARTER_WEAPONS],
-  equipped: STARTER_WEAPONS[0],
+  primary: 'old-rifle',
+  secondary: 'm9-sidearm',
   character: null,
   character2: null,
   players: 1,
@@ -60,13 +64,22 @@ export function loadProfile(): Profile {
     for (const id of STARTER_WEAPONS) {
       if (!owned.includes(id)) owned.push(id)
     }
-    const equipped = isWeaponId(record.equipped) && owned.includes(record.equipped)
+    // Older saves stored a single `equipped` weapon; keep it in its own slot.
+    const legacy = isWeaponId(record.equipped) && owned.includes(record.equipped)
       ? record.equipped
-      : owned[0]
+      : null
+    const pick = (slot: 'primary' | 'secondary', stored: unknown): WeaponId => {
+      if (isWeaponId(stored) && owned.includes(stored) && weaponById(stored).slot === slot) {
+        return stored
+      }
+      if (legacy && weaponById(legacy).slot === slot) return legacy
+      return slot === 'primary' ? 'old-rifle' : 'm9-sidearm'
+    }
     return {
       scrap: typeof record.scrap === 'number' && record.scrap >= 0 ? Math.floor(record.scrap) : 0,
       owned,
-      equipped,
+      primary: pick('primary', record.primary),
+      secondary: pick('secondary', record.secondary),
       character: isCharacterId(record.character) ? record.character : null,
       character2: isCharacterId(record.character2) ? record.character2 : null,
       players: record.players === 2 ? 2 : 1,

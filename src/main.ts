@@ -13,8 +13,8 @@ import {
 } from './missions'
 import type { Mission, PathInfo } from './missions'
 import { RadarChart } from './radar'
-import { WEAPONS, weaponById } from './weapons'
-import type { Weapon, WeaponId } from './weapons'
+import { weaponById, weaponsInSlot } from './weapons'
+import type { Weapon, WeaponId, WeaponSlot } from './weapons'
 import { loadProfile, missionReward, saveProfile } from './profile'
 import { CHARACTERS, characterById } from './characters'
 import type { CharacterId } from './characters'
@@ -123,7 +123,7 @@ app.innerHTML = `
         <button id="players-2" class="rounded-lg px-4 py-1.5 font-bold">2 Players</button>
       </div>
       <div class="mt-3 text-center text-xs text-slate-400">
-        Equipped: <span id="menu-equipped" class="font-semibold text-emerald-300">Rusty Pistol</span>
+        Loadout: <span id="menu-equipped" class="font-semibold text-emerald-300">Old Rifle</span>
         · Survivor: <span id="menu-character" class="font-semibold text-amber-300">—</span>
         <button id="character-btn" class="ml-2 rounded bg-white/10 px-2 py-0.5 font-semibold text-white hover:bg-white/20">Change</button>
       </div>
@@ -131,10 +131,11 @@ app.innerHTML = `
       <div class="mt-8 rounded-lg bg-white/5 p-4 text-xs text-slate-400 ring-1 ring-white/10">
         <span class="font-semibold text-slate-200">Controls:</span>
         WASD or Arrow keys to move · aim with the mouse · left click to shoot (keep running while you fire) · R to reload ·
-        <span class="font-mono text-slate-200">E</span> for your character's active ability (Engineer also drops a barricade with <span class="font-mono text-slate-200">Q</span>).
+        <span class="font-mono text-slate-200">Q</span> swaps between your primary and secondary weapon ·
+        <span class="font-mono text-slate-200">E</span> for your character's active ability (Engineer also drops a barricade with <span class="font-mono text-slate-200">F</span>).
         Each mission loads its own isolated map. Yellow crates restock ammo.
         <span class="font-semibold text-orange-300">Orange Plague Bugs</span> are fast and sting — five stings and you turn.
-        <div class="mt-2"><span class="font-semibold text-slate-200">Co-op:</span> Player 2 moves with the Arrow keys, auto-aims at the nearest enemy and fires on its own or with the <span class="font-mono text-slate-200">.</span> key. Their ability is <span class="font-mono text-slate-200">M</span> (barricade <span class="font-mono text-slate-200">,</span>).</div>
+        <div class="mt-2"><span class="font-semibold text-slate-200">Co-op:</span> Player 2 moves with the Arrow keys, auto-aims at the nearest enemy and fires on its own or with the <span class="font-mono text-slate-200">.</span> key. Their ability is <span class="font-mono text-slate-200">M</span> (barricade <span class="font-mono text-slate-200">,</span>), and <span class="font-mono text-slate-200">N</span> swaps their weapon.</div>
       </div>
     </div>
   </div>
@@ -161,6 +162,10 @@ app.innerHTML = `
       <div class="flex items-baseline justify-between">
         <h2 id="arsenal-title" class="text-3xl font-black tracking-tight text-yellow-400">WEAPONS SHOP</h2>
         <div class="text-sm font-bold text-yellow-300">Scrap: <span id="arsenal-scrap">0</span></div>
+      </div>
+      <div class="mt-4 flex gap-2 text-xs">
+        <button id="slot-primary" class="rounded-lg px-4 py-1.5 font-bold">Primary</button>
+        <button id="slot-secondary" class="rounded-lg px-4 py-1.5 font-bold">Secondary / Melee</button>
       </div>
       <div class="mt-6 grid gap-6 md:grid-cols-[minmax(0,1fr)_320px]">
         <div id="weapon-list" class="space-y-2"></div>
@@ -459,14 +464,15 @@ function launch(m: Mission) {
   currentMission = m
   const roster = [characterById(activeCharacter())]
   if (profile.players === 2) roster.push(characterById(secondCharacter()))
-  const begin = () => game.startMission(m, weaponById(profile.equipped), roster)
-  // Every boss opens with a character-driven briefing scene.
+  const loadout = [weaponById(profile.primary), weaponById(profile.secondary)]
+  // Boss arenas load frozen behind the briefing scene, then cut to the reveal.
   if (m.type === 'boss') {
     show(menu, false)
-    playBossDialogue(activeCharacter(), m.boss ?? 'hive-mother', begin)
+    game.startMission(m, loadout, roster, true)
+    playBossDialogue(activeCharacter(), m.boss ?? 'hive-mother', () => game.resume())
     return
   }
-  begin()
+  game.startMission(m, loadout, roster)
 }
 
 function activeCharacter(): CharacterId {
@@ -575,7 +581,8 @@ el('characters-close').addEventListener('click', () => {
 
 type ArsenalMode = 'shop' | 'locker'
 let arsenalMode: ArsenalMode = 'shop'
-let selectedWeapon: Weapon = weaponById(profile.equipped)
+let arsenalSlot: WeaponSlot = 'primary'
+let selectedWeapon: Weapon = weaponById(profile.primary)
 
 const weaponListEl = el('weapon-list')
 const detailAction = el<HTMLButtonElement>('detail-action')
@@ -589,7 +596,9 @@ function persist() {
   saveProfile(profile)
   el('menu-scrap').textContent = `${profile.scrap}`
   el('arsenal-scrap').textContent = `${profile.scrap}`
-  el('menu-equipped').textContent = weaponById(profile.equipped).name
+  el('menu-equipped').textContent = `${weaponById(profile.primary).name} + ${
+    weaponById(profile.secondary).name
+  }`
   el('menu-character').textContent = profile.character
     ? profile.players === 2
       ? `${characterById(profile.character).name} + ${characterById(secondCharacter()).name}`
@@ -605,19 +614,41 @@ function openArsenal(mode: ArsenalMode) {
   el('arsenal-title').className = `text-3xl font-black tracking-tight ${
     mode === 'shop' ? 'text-yellow-400' : 'text-sky-400'
   }`
-  const available = mode === 'shop' ? WEAPONS : WEAPONS.filter((w) => owns(w.id))
+  const available = slotWeapons()
   selectedWeapon = available.includes(selectedWeapon) ? selectedWeapon : available[0]
   show(menu, false)
   show(arsenalScreen, true)
   renderArsenal()
 }
 
+/** The shop lists every weapon in the tab; the locker only what you own. */
+function slotWeapons(): Weapon[] {
+  const inSlot = weaponsInSlot(arsenalSlot)
+  return arsenalMode === 'shop' ? inSlot : inSlot.filter((w) => owns(w.id))
+}
+
+function equippedIn(w: Weapon) {
+  return profile[w.slot] === w.id
+}
+
+function renderSlotTabs() {
+  for (const slot of ['primary', 'secondary'] as WeaponSlot[]) {
+    const btn = el(`slot-${slot}`)
+    btn.className = `rounded-lg px-4 py-1.5 font-bold ${
+      arsenalSlot === slot
+        ? 'bg-emerald-500 text-emerald-950'
+        : 'bg-white/10 text-slate-300 hover:bg-white/20'
+    }`
+  }
+}
+
 function renderArsenal() {
-  const available = arsenalMode === 'shop' ? WEAPONS : WEAPONS.filter((w) => owns(w.id))
+  renderSlotTabs()
+  const available = slotWeapons()
   weaponListEl.innerHTML = ''
   for (const w of available) {
     const owned = owns(w.id)
-    const equipped = profile.equipped === w.id
+    const equipped = equippedIn(w)
     const active = selectedWeapon.id === w.id
     const row = document.createElement('button')
     row.className = `flex w-full items-center justify-between rounded-xl px-4 py-3 text-left ring-1 transition ${
@@ -657,14 +688,14 @@ function renderDetail() {
   detailNote.textContent = ''
 
   const owned = owns(w.id)
-  const equipped = profile.equipped === w.id
+  const equipped = equippedIn(w)
   if (equipped) {
     detailAction.textContent = 'Equipped'
     detailAction.disabled = true
     detailAction.className =
       'mt-4 w-full cursor-default rounded-lg bg-white/10 px-4 py-3 text-sm font-bold text-slate-300'
   } else if (owned) {
-    detailAction.textContent = 'Equip'
+    detailAction.textContent = w.slot === 'primary' ? 'Equip as primary' : 'Equip as secondary'
     detailAction.disabled = false
     detailAction.className =
       'mt-4 w-full rounded-lg bg-emerald-500 px-4 py-3 text-sm font-bold text-emerald-950 hover:bg-emerald-400'
@@ -683,11 +714,11 @@ function renderDetail() {
 detailAction.addEventListener('click', () => {
   const w = selectedWeapon
   if (owns(w.id)) {
-    profile.equipped = w.id
+    profile[w.slot] = w.id
   } else if (profile.scrap >= w.price) {
     profile.scrap -= w.price
     profile.owned.push(w.id)
-    profile.equipped = w.id
+    profile[w.slot] = w.id
   } else {
     detailNote.textContent = `Need ${w.price - profile.scrap} more scrap.`
     return
@@ -695,6 +726,15 @@ detailAction.addEventListener('click', () => {
   persist()
   renderArsenal()
 })
+
+for (const slot of ['primary', 'secondary'] as WeaponSlot[]) {
+  el(`slot-${slot}`).addEventListener('click', () => {
+    arsenalSlot = slot
+    const available = slotWeapons()
+    if (available.length) selectedWeapon = available[0]
+    renderArsenal()
+  })
+}
 
 el('shop-btn').addEventListener('click', () => openArsenal('shop'))
 el('locker-btn').addEventListener('click', () => openArsenal('locker'))
@@ -811,9 +851,10 @@ function playerPanel(): HTMLElement {
       <div data-role="hp-bar" class="h-full w-full rounded-full bg-emerald-500"></div>
     </div>
     <div class="mt-2 flex items-baseline justify-between">
-      <span class="text-[11px] font-semibold uppercase tracking-wider text-amber-300">Ammo</span>
+      <span data-role="weapon" class="text-[11px] font-semibold uppercase tracking-wider text-amber-300">Ammo</span>
       <span data-role="ammo" class="font-mono text-base font-bold text-amber-200"></span>
     </div>
+    <div data-role="stowed" class="text-[11px] font-semibold text-slate-400"></div>
     <div data-role="reload" class="hidden text-[11px] font-semibold text-amber-400">RELOADING…</div>
     <div data-role="lives" class="hidden text-[11px] font-semibold text-sky-300"></div>
     <div class="mt-2 flex items-center justify-between text-[11px] font-semibold uppercase tracking-wider text-orange-300">
@@ -856,7 +897,11 @@ function updatePlayerPanels(h: Hud) {
     bar.className = `h-full rounded-full transition-[width] duration-150 ${
       pct > 50 ? 'bg-emerald-500' : pct > 25 ? 'bg-amber-500' : 'bg-red-500'
     }`
-    pick(panel, 'ammo').textContent = `${p.mag} / ${p.reserve}`
+    pick(panel, 'weapon').textContent = p.weaponName
+    pick(panel, 'ammo').textContent = p.infiniteAmmo ? '∞' : `${p.mag} / ${p.reserve}`
+    pick(panel, 'stowed').textContent = p.stowedName
+      ? `Swap [${p.switchKey}]: ${p.stowedName}`
+      : ''
     pick(panel, 'reload').classList.toggle('hidden', !p.reloading)
     const lives = pick(panel, 'lives')
     lives.classList.toggle('hidden', p.lives <= 0)
@@ -879,7 +924,7 @@ function updatePlayerPanels(h: Hud) {
     pick(panel, 'ability-name').textContent = `${ab.name} [${ab.key}]`
     const extras: string[] = []
     if (ab.charges >= 0) extras.push(`${ab.charges} left`)
-    if (ab.barricades > 0) extras.push(`barricade [${p.id === 1 ? 'Q' : ','}]`)
+    if (ab.barricades > 0) extras.push(`barricade [${ab.barricadeKey}]`)
     const suffix = extras.length ? ` · ${extras.join(' · ')}` : ''
     pick(panel, 'ability-state').textContent = ab.active > 0
       ? `ACTIVE ${ab.active.toFixed(1)}s${suffix}`
@@ -902,8 +947,8 @@ function updatePlayerPanels(h: Hud) {
 
   hudControls.innerHTML =
     h.players.length > 1
-      ? 'P1: WASD · mouse aim · left click to shoot · R reload · E ability · Q barricade<br>P2: Arrow keys · auto-aim · fires automatically or with . · M ability · , barricade'
-      : 'WASD / Arrows to move · Mouse to aim · Left click to shoot · R to reload · E ability · Q barricade'
+      ? 'P1: WASD · mouse aim · left click to shoot · R reload · Q swap weapon · E ability · F barricade<br>P2: Arrow keys · auto-aim · fires automatically or with . · N swap weapon · M ability · , barricade'
+      : 'WASD / Arrows to move · Mouse to aim · Left click to shoot · R to reload · Q to swap weapon · E ability · F barricade'
 }
 
 game.onHud = (h: Hud) => {

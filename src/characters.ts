@@ -124,7 +124,7 @@ export const CHARACTERS: Character[] = [
     ability: {
       name: 'Defense Deployment',
       description:
-        'Drops an auto-turret on the spot — one active at a time, twice per mission. Q (P2: ,) drops one barricade.',
+        'Drops an auto-turret on the spot — one active at a time, twice per mission. F (P2: ,) drops one barricade.',
       cooldown: 4,
       duration: 0,
       charges: 2,

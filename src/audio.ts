@@ -14,6 +14,9 @@ const PROFILES: Record<string, SoundProfile> = {
   'viper-smg': { startFreq: 540, endFreq: 180, duration: 0.05, type: 'square', gain: 0.08 },
   'hellfire-shotgun': { startFreq: 220, endFreq: 40, duration: 0.24, type: 'sawtooth', gain: 0.18 },
   'titan-sniper': { startFreq: 700, endFreq: 45, duration: 0.34, type: 'triangle', gain: 0.2 },
+  'm9-sidearm': { startFreq: 380, endFreq: 120, duration: 0.07, type: 'square', gain: 0.1 },
+  'combat-machete': { startFreq: 900, endFreq: 260, duration: 0.16, type: 'triangle', gain: 0.12 },
+  'stun-baton': { startFreq: 1200, endFreq: 180, duration: 0.2, type: 'sawtooth', gain: 0.12 },
 }
 
 export type SfxId =
@@ -26,6 +29,7 @@ export type SfxId =
   | 'sting'
   | 'boss-roar'
   | 'boss-dash'
+  | 'swap'
   | 'type'
 
 const SFX: Record<SfxId, SoundProfile> = {
@@ -38,6 +42,7 @@ const SFX: Record<SfxId, SoundProfile> = {
   sting: { startFreq: 980, endFreq: 300, duration: 0.16, type: 'square', gain: 0.12 },
   'boss-roar': { startFreq: 90, endFreq: 38, duration: 1.4, type: 'sawtooth', gain: 0.26 },
   'boss-dash': { startFreq: 420, endFreq: 110, duration: 0.5, type: 'square', gain: 0.2 },
+  swap: { startFreq: 300, endFreq: 700, duration: 0.12, type: 'square', gain: 0.1 },
   type: { startFreq: 640, endFreq: 520, duration: 0.03, type: 'square', gain: 0.03 },
 }
 

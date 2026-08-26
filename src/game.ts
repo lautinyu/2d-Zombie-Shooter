@@ -1,5 +1,5 @@
 import type { BossKind, Mission } from './missions'
-import type { Weapon } from './weapons'
+import type { MeleeProfile, Weapon } from './weapons'
 import { weaponById } from './weapons'
 import type { Character } from './characters'
 import { characterById } from './characters'
@@ -30,9 +30,15 @@ interface Player {
   vy: number
   hurtCooldown: number
   character: Character
+  /** Live copy of the equipped slot's weapon and ammo. */
   weapon: Weapon
   mag: number
   reserve: number
+  /** Primary slot first, secondary second; each keeps its own ammo. */
+  slots: LoadoutSlot[]
+  slotIndex: 0 | 1
+  /** 1 right after a melee swing, decaying to 0 — drives the swing arc. */
+  swing: number
   reloadTimer: number
   fireTimer: number
   shotsFired: number
@@ -55,6 +61,13 @@ interface Player {
   recoil: number
 }
 
+/** One carried weapon and the ammo left in it. */
+interface LoadoutSlot {
+  weapon: Weapon
+  mag: number
+  reserve: number
+}
+
 export type EnemyKind = 'zombie' | 'bug' | 'runner' | 'camo'
 
 interface Enemy {
@@ -75,6 +88,8 @@ interface Enemy {
   driftAngle: number
   /** Camo zombies drop their disguise once they close in, and stay revealed. */
   revealed: boolean
+  /** Seconds frozen solid by a Stun Baton hit. */
+  stun: number
 }
 
 /** Acid left by enemies killed under the Toxic Blood mutation. */
@@ -224,6 +239,7 @@ export interface HudAbility {
   /** Remaining uses, or -1 when the ability is cooldown-gated only. */
   charges: number
   barricades: number
+  barricadeKey: string
 }
 
 export interface HudPlayer {
@@ -237,6 +253,12 @@ export interface HudPlayer {
   magSize: number
   reserve: number
   reloading: boolean
+  weaponName: string
+  /** True for weapons that never consume ammo (M9, melee). */
+  infiniteAmmo: boolean
+  /** Name of the weapon in the slot that is not equipped. */
+  stowedName: string
+  switchKey: string
   stings: number
   lives: number
   down: boolean
@@ -321,6 +343,10 @@ const ACID_DPS = 16
 const MUTATION_SKIN_FADE = 2.5
 /** How fast the hand kickback settles after a shot. */
 const RECOIL_RECOVERY = 7
+/** How fast a melee swing arc fades after it lands. */
+const MELEE_SWING_RECOVERY = 4
+/** Dead time after a weapon swap, so switching is not a free extra shot. */
+const WEAPON_SWITCH_TIME = 0.3
 
 const MUTATION_SKINS: Record<MutationId, { body: string; trim: string }> = {
   'hyper-speed': { body: '#a855f7', trim: '#e9d5ff' },
@@ -429,6 +455,8 @@ export class Game {
   /** Chosen on the intro splash; affects drawing only, never physics. */
   textures: TexturePack = 'classic'
 
+  /** Frozen simulation: the world renders but nothing moves. */
+  private paused = false
   private players: Player[] = []
   private enemies: Enemy[] = []
   private bullets: Bullet[] = []
@@ -494,10 +522,16 @@ export class Game {
     id: 1 | 2,
     x: number,
     y: number,
-    weapon: Weapon,
+    loadout: Weapon[],
     character: Character,
     auto: boolean
   ): Player {
+    const slots: LoadoutSlot[] = loadout.map((w) => ({
+      weapon: w,
+      mag: w.magSize,
+      reserve: w.reserveStart,
+    }))
+    const active = slots[0]
     return {
       id,
       x,
@@ -511,9 +545,12 @@ export class Game {
       vy: 0,
       hurtCooldown: 0,
       character,
-      weapon,
-      mag: weapon.magSize,
-      reserve: weapon.reserveStart,
+      weapon: active.weapon,
+      mag: active.mag,
+      reserve: active.reserve,
+      slots,
+      slotIndex: 0,
+      swing: 0,
       reloadTimer: 0,
       fireTimer: 0,
       shotsFired: 0,
@@ -561,6 +598,8 @@ export class Game {
       p2Ability: () => this.useAbility(this.players[1]),
       p1Barricade: () => this.deployBarricade(this.p1),
       p2Barricade: () => this.deployBarricade(this.players[1]),
+      p1Switch: () => this.switchWeapon(this.p1),
+      p2Switch: () => this.switchWeapon(this.players[1]),
       p1Shot: () => {
         if (this.p1) this.p1.queuedShot = true
       },
@@ -593,9 +632,19 @@ export class Game {
     return window.innerHeight
   }
 
-  startMission(mission: Mission, weapon: Weapon, characters: Character[]) {
+  /**
+   * Boss missions load frozen so the pre-fight dialogue plays over the arena;
+   * `resume()` unfreezes them and rolls straight into the reveal.
+   */
+  startMission(
+    mission: Mission,
+    loadout: Weapon[],
+    characters: Character[],
+    paused = false
+  ) {
+    this.paused = paused
     this.mission = mission
-    this.weapon = weapon
+    this.weapon = loadout[0]
     this.character = characters[0]
     // Only the mission's own map is instantiated — other maps never load.
     this.map = mapById(mission.map)
@@ -643,7 +692,7 @@ export class Game {
           : this.openSpot(PLAYER_RADIUS + 10, centre, 0, 420)
       const spawn =
         i === 0 ? solo : this.openSpot(PLAYER_RADIUS + 10, this.players[0], 50, 180)
-      this.players.push(this.makePlayer(id, spawn.x, spawn.y, weapon, c, id === 2))
+      this.players.push(this.makePlayer(id, spawn.x, spawn.y, loadout, c, id === 2))
     })
 
     this.survivors = []
@@ -777,7 +826,7 @@ export class Game {
     if (!this.running) return
     const dt = Math.min((now - this.last) / 1000, 0.05)
     this.last = now
-    if (this.state === 'playing') this.update(dt)
+    if (this.state === 'playing' && !this.paused) this.update(dt)
     this.render()
     this.emitHud()
     requestAnimationFrame(this.loop)
@@ -797,9 +846,13 @@ export class Game {
         magSize: p.weapon.magSize,
         reserve: p.reserve,
         reloading: p.reloadTimer > 0,
+        infiniteAmmo: Boolean(p.weapon.infiniteAmmo),
+        stowedName: p.slots[1 - p.slotIndex]?.weapon.name ?? '',
+        switchKey: p.id === 1 ? 'Q' : 'N',
         stings: p.stings,
         lives: p.lives,
         down: p.down,
+        weaponName: p.weapon.name,
         ability: {
           name: p.character.ability.name,
           key: p.id === 1 ? 'E' : 'M',
@@ -808,6 +861,7 @@ export class Game {
           active: Math.max(0, p.abilityActive),
           charges: p.abilityCharges,
           barricades: p.barricadeCharges,
+          barricadeKey: p.id === 1 ? 'F' : ',',
         },
       })),
       mutation:
@@ -851,7 +905,6 @@ export class Game {
     this.shake = Math.max(0, this.shake - dt * 1.6)
     this.bubbleTimer = Math.max(0, this.bubbleTimer - dt)
     this.cameraEase = Math.max(0, this.cameraEase - dt)
-    if (this.reveal === 'pending') this.checkRevealTrigger()
     if (this.reveal === 'playing') {
       // Controls are locked: nothing but the camera moves during the reveal.
       this.revealTimer -= dt
@@ -884,16 +937,15 @@ export class Game {
     this.checkOutcome()
   }
 
-  /** Walking into the middle of the hive hands the scene over to the boss. */
-  private checkRevealTrigger() {
-    const boss = this.boss
-    if (!boss) return
-    const cx = this.map.width / 2
-    const cy = this.map.height / 2
-    const arrived = this.alivePlayers.some(
-      (p) => Math.hypot(p.x - cx, p.y - cy) < BOSS_REVEAL_RANGE
-    )
-    if (!arrived) return
+  /** Lifts the pre-fight freeze; boss arenas cut straight to the reveal. */
+  resume() {
+    this.paused = false
+    if (this.reveal === 'pending') this.startReveal()
+  }
+
+  /** Pans the camera onto the boss and hands the scene over to phase 1. */
+  private startReveal() {
+    if (!this.boss) return
     this.reveal = 'playing'
     this.revealTimer = BOSS_REVEAL_TIME
     this.bubbleTimer = BOSS_REVEAL_TIME + 0.8
@@ -1047,6 +1099,22 @@ export class Game {
     p.abilityCooldown = ability.cooldown
   }
 
+  /** Swaps the primary and secondary slots, ammo state and all. */
+  private switchWeapon(p: Player | undefined) {
+    if (this.state !== 'playing' || this.paused || !p || p.down || p.slots.length < 2) return
+    const current = p.slots[p.slotIndex]
+    current.mag = p.mag
+    current.reserve = p.reserve
+    p.slotIndex = p.slotIndex === 0 ? 1 : 0
+    const next = p.slots[p.slotIndex]
+    p.weapon = next.weapon
+    p.mag = next.mag
+    p.reserve = next.reserve
+    p.reloadTimer = 0
+    p.fireTimer = Math.max(p.fireTimer, WEAPON_SWITCH_TIME)
+    playSfx('swap')
+  }
+
   /** Engineer's secondary: a destructible wall that blocks the horde. */
   private deployBarricade(p: Player | undefined) {
     if (this.state !== 'playing' || !p || p.down || p.barricadeCharges <= 0) return
@@ -1130,6 +1198,7 @@ export class Game {
     }
     p.hurtCooldown = Math.max(0, p.hurtCooldown - dt)
     p.recoil = Math.max(0, p.recoil - dt * RECOIL_RECOVERY)
+    p.swing = Math.max(0, p.swing - dt * MELEE_SWING_RECOVERY)
 
     const c = p.character
     if (c.regenFraction > 0) {
@@ -1213,7 +1282,7 @@ export class Game {
   }
 
   private startReload(p: Player | undefined) {
-    if (this.state !== 'playing' || !p || p.down) return
+    if (this.state !== 'playing' || !p || p.down || p.weapon.infiniteAmmo) return
     if (p.reloadTimer > 0 || p.mag === p.weapon.magSize || p.reserve <= 0) return
     p.reloadTimer = p.weapon.reloadTime * p.character.reloadMultiplier
   }
@@ -1246,6 +1315,10 @@ export class Game {
   private fire(p: Player) {
     const w = p.weapon
     p.shotsFired += 1
+    if (w.melee) {
+      this.swingMelee(p, w.melee)
+      return
+    }
     const acidShot = w.perk === 'acidic-spray' && p.shotsFired % ACID_SHOT_INTERVAL === 0
     const overdrive = p.character.id === 'army-retiree' && p.abilityActive > 0
     const damage = w.damage * (overdrive ? OVERDRIVE_DAMAGE : 1)
@@ -1278,8 +1351,48 @@ export class Game {
         hit: new Set<Enemy>(),
       })
     }
-    p.mag -= 1
+    if (!w.infiniteAmmo) p.mag -= 1
     p.recoil = 1
+    playShot(w)
+  }
+
+  /**
+   * Melee weapons sweep an arc in front of the player, cutting through every
+   * enemy inside it, shoving them back and — for the baton — freezing them.
+   */
+  private swingMelee(p: Player, melee: MeleeProfile) {
+    const w = p.weapon
+    const overdrive = p.character.id === 'army-retiree' && p.abilityActive > 0
+    const damage = w.damage * (overdrive ? OVERDRIVE_DAMAGE : 1)
+    p.swing = 1
+    p.recoil = 1
+
+    for (let i = this.enemies.length - 1; i >= 0; i--) {
+      const e = this.enemies[i]
+      const d = Math.hypot(e.x - p.x, e.y - p.y)
+      if (d > p.r + melee.reach + e.r) continue
+      const to = Math.atan2(e.y - p.y, e.x - p.x)
+      if (Math.abs(angleDelta(to, p.angle)) > melee.arc / 2) continue
+      e.hp -= damage * this.mutationArmour
+      this.moveEnemy(e, Math.cos(to) * melee.knockback, Math.sin(to) * melee.knockback)
+      if (melee.stunChance > 0 && Math.random() < melee.stunChance) e.stun = melee.stunTime
+      if (e.hp <= 0) this.killEnemy(i)
+    }
+
+    const boss = this.boss
+    if (boss && boss.hp > 0) {
+      const d = Math.hypot(boss.x - p.x, boss.y - p.y)
+      const to = Math.atan2(boss.y - p.y, boss.x - p.x)
+      if (d <= p.r + melee.reach + boss.r && Math.abs(angleDelta(to, p.angle)) <= melee.arc / 2) {
+        boss.hp -= damage
+        boss.hurt = 0.12
+        if (boss.hp <= boss.maxHp / 2 && boss.phase === 1) {
+          boss.phase = 2
+          boss.dashTimer = 2
+          playSfx('boss-roar')
+        }
+      }
+    }
     playShot(w)
   }
 
@@ -1754,6 +1867,12 @@ export class Game {
       }
       z.speed = (z.burn > 0 ? z.baseSpeed * BURN_SLOW : z.baseSpeed) * this.mutationSpeed
 
+      // A stunned enemy is frozen solid: no chasing, no attacking.
+      if (z.stun > 0) {
+        z.stun -= dt
+        continue
+      }
+
       const target = this.targetFor(z)
       if (!target.survivor && !target.player) continue
       const dx = target.x - z.x
@@ -1918,6 +2037,7 @@ export class Game {
       aware: false,
       driftAngle: Math.random() * Math.PI * 2,
       revealed: false,
+      stun: 0,
     }
   }
 
@@ -1940,6 +2060,7 @@ export class Game {
       aware: false,
       driftAngle: Math.random() * Math.PI * 2,
       revealed: false,
+      stun: 0,
     }
   }
 
@@ -1962,6 +2083,7 @@ export class Game {
       aware: false,
       driftAngle: Math.random() * Math.PI * 2,
       revealed: false,
+      stun: 0,
     }
   }
 
@@ -1983,6 +2105,7 @@ export class Game {
       aware: false,
       driftAngle: Math.random() * Math.PI * 2,
       revealed: false,
+      stun: 0,
     }
   }
 
@@ -2085,6 +2208,7 @@ export class Game {
       else if (e.kind === 'camo') this.drawCamo(e)
       else if (e.kind === 'runner') this.drawRunner(e)
       else this.drawZombie(e)
+      if (e.stun > 0) this.drawStun(e)
     }
 
     if (this.boss) this.drawBoss(this.boss)
@@ -2880,6 +3004,28 @@ export class Game {
     ctx.restore()
   }
 
+  /** Crackling electric ring over a baton-frozen enemy. */
+  private drawStun(e: Enemy) {
+    const ctx = this.ctx
+    const y = this.textures === 'enhanced' ? e.y - UNIT_LIFT : e.y
+    ctx.save()
+    ctx.translate(e.x, y)
+    ctx.strokeStyle = 'rgba(56,189,248,0.9)'
+    ctx.lineWidth = 2
+    for (let i = 0; i < 6; i++) {
+      const a = (i / 6) * Math.PI * 2 + e.stun * 6
+      ctx.beginPath()
+      ctx.moveTo(Math.cos(a) * (e.r + 2), Math.sin(a) * (e.r + 2))
+      ctx.lineTo(Math.cos(a) * (e.r + 9), Math.sin(a) * (e.r + 9))
+      ctx.stroke()
+    }
+    ctx.beginPath()
+    ctx.arc(0, 0, e.r + 5, 0, Math.PI * 2)
+    ctx.strokeStyle = 'rgba(125,211,252,0.5)'
+    ctx.stroke()
+    ctx.restore()
+  }
+
   private drawZombie(z: Enemy) {
     const ctx = this.ctx
     this.drawStatusRing(z)
@@ -3109,11 +3255,30 @@ export class Game {
       ctx.stroke()
     }
 
+    const melee = p.weapon.melee
     const kick = p.recoil * 5
     ctx.save()
     ctx.rotate(p.angle)
-    ctx.fillStyle = '#e5e7eb'
-    ctx.fillRect(p.r - 4 - kick, -4, 22, 8)
+    if (melee) {
+      // The blade sweeps through its arc as the swing decays.
+      ctx.save()
+      ctx.rotate((p.swing - 0.5) * melee.arc)
+      ctx.fillStyle = p.weapon.color
+      ctx.fillRect(p.r - 2, -2.5, melee.reach * 0.7, 5)
+      ctx.fillStyle = '#1f2937'
+      ctx.fillRect(p.r - 6, -4, 8, 8)
+      ctx.restore()
+      if (p.swing > 0) {
+        ctx.beginPath()
+        ctx.arc(0, 0, p.r + melee.reach * 0.8, -melee.arc / 2, melee.arc / 2)
+        ctx.strokeStyle = `rgba(226,232,240,${0.5 * p.swing})`
+        ctx.lineWidth = 4
+        ctx.stroke()
+      }
+    } else {
+      ctx.fillStyle = '#e5e7eb'
+      ctx.fillRect(p.r - 4 - kick, -4, 22, 8)
+    }
     ctx.restore()
 
     drawCharacterSkin(ctx, p.character.id, p.r, p.angle, p.hurtCooldown > 0)
@@ -3284,6 +3449,14 @@ export class Game {
     ctx.fillText(m.name, mx + 4, my + 14)
     ctx.restore()
   }
+}
+
+/** Signed shortest angle from `b` to `a`, in radians. */
+function angleDelta(a: number, b: number) {
+  let d = a - b
+  while (d > Math.PI) d -= Math.PI * 2
+  while (d < -Math.PI) d += Math.PI * 2
+  return d
 }
 
 function clamp(v: number, lo: number, hi: number) {

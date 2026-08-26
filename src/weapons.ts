@@ -1,4 +1,28 @@
-export type WeaponId = 'rusty-pistol' | 'old-rifle' | 'viper-smg' | 'hellfire-shotgun' | 'titan-sniper'
+export type WeaponId =
+  | 'rusty-pistol'
+  | 'old-rifle'
+  | 'viper-smg'
+  | 'hellfire-shotgun'
+  | 'titan-sniper'
+  | 'm9-sidearm'
+  | 'combat-machete'
+  | 'stun-baton'
+
+/** Primaries are the heavy firearms; secondaries are sidearms and melee. */
+export type WeaponSlot = 'primary' | 'secondary'
+
+/** Swing profile for melee secondaries, which hit an arc instead of firing. */
+export interface MeleeProfile {
+  /** How far in front of the player the swing lands. */
+  reach: number
+  /** Total width of the swing arc, in radians. */
+  arc: number
+  /** Push applied to everything caught in the swing. */
+  knockback: number
+  /** Chance per hit to freeze the target solid. */
+  stunChance: number
+  stunTime: number
+}
 
 export type PerkId = 'none' | 'acidic-spray' | 'dragons-breath' | 'armor-piercing'
 
@@ -14,6 +38,7 @@ export interface RadarStats {
 export interface Weapon {
   id: WeaponId
   name: string
+  slot: WeaponSlot
   price: number
   color: string
   perk: PerkId
@@ -34,6 +59,10 @@ export interface Weapon {
   tracerWidth: number
   /** Fraction of damage a pellet keeps at the very end of its flight. */
   falloff?: number
+  /** Never consumes ammo: sidearms with scavenged rounds and melee. */
+  infiniteAmmo?: boolean
+  /** Present on melee weapons; swings an arc instead of spawning bullets. */
+  melee?: MeleeProfile
 }
 
 export const RADAR_AXES: { key: keyof RadarStats; label: string }[] = [
@@ -48,6 +77,7 @@ export const WEAPONS: Weapon[] = [
   {
     id: 'rusty-pistol',
     name: 'Rusty Pistol',
+    slot: 'secondary',
     price: 0,
     color: '#94a3b8',
     perk: 'none',
@@ -69,6 +99,7 @@ export const WEAPONS: Weapon[] = [
   {
     id: 'old-rifle',
     name: 'Old Rifle',
+    slot: 'primary',
     price: 0,
     color: '#a3a380',
     perk: 'none',
@@ -90,6 +121,7 @@ export const WEAPONS: Weapon[] = [
   {
     id: 'viper-smg',
     name: 'Viper SMG',
+    slot: 'primary',
     price: 500,
     color: '#4ade80',
     perk: 'acidic-spray',
@@ -111,6 +143,7 @@ export const WEAPONS: Weapon[] = [
   {
     id: 'hellfire-shotgun',
     name: 'Hellfire Shotgun',
+    slot: 'primary',
     price: 620,
     color: '#fb923c',
     perk: 'dragons-breath',
@@ -133,6 +166,7 @@ export const WEAPONS: Weapon[] = [
   {
     id: 'titan-sniper',
     name: 'Titan Sniper',
+    slot: 'primary',
     price: 750,
     color: '#60a5fa',
     perk: 'armor-piercing',
@@ -151,9 +185,84 @@ export const WEAPONS: Weapon[] = [
     spread: 0.005,
     tracerWidth: 5,
   },
+  {
+    id: 'm9-sidearm',
+    name: 'M9 Sidearm',
+    slot: 'secondary',
+    price: 0,
+    color: '#cbd5e1',
+    perk: 'none',
+    perkName: 'Scavenged Rounds',
+    perkDescription: 'Never runs dry — 9mm is the one thing still lying everywhere.',
+    description: 'Free backup handgun: infinite ammo, feeble damage.',
+    radar: { damage: 1, fireRate: 3, reloadSpeed: 5, ammoCapacity: 5, range: 2 },
+    damage: 18,
+    fireInterval: 0.2,
+    reloadTime: 0.9,
+    magSize: 15,
+    reserveStart: 0,
+    bulletSpeed: 800,
+    bulletLife: 0.65,
+    pellets: 1,
+    spread: 0.06,
+    tracerWidth: 3,
+    infiniteAmmo: true,
+  },
+  {
+    id: 'combat-machete',
+    name: 'Combat Machete',
+    slot: 'secondary',
+    price: 260,
+    color: '#f87171',
+    perk: 'none',
+    perkName: 'Cleave',
+    perkDescription: 'Each swing cuts every enemy in the arc and shoves them back.',
+    description: 'Fast melee blade: no ammo, slices through overlapping zombies.',
+    radar: { damage: 3, fireRate: 4, reloadSpeed: 5, ammoCapacity: 5, range: 1 },
+    damage: 52,
+    fireInterval: 0.34,
+    reloadTime: 0,
+    magSize: 1,
+    reserveStart: 0,
+    bulletSpeed: 0,
+    bulletLife: 0,
+    pellets: 0,
+    spread: 0,
+    tracerWidth: 0,
+    infiniteAmmo: true,
+    melee: { reach: 62, arc: Math.PI * 0.75, knockback: 26, stunChance: 0, stunTime: 0 },
+  },
+  {
+    id: 'stun-baton',
+    name: 'Stun Baton',
+    slot: 'secondary',
+    price: 340,
+    color: '#38bdf8',
+    perk: 'none',
+    perkName: 'Overcharge',
+    perkDescription: '40% chance per hit to electrocute a target, freezing it for 2 seconds.',
+    description: 'Defensive melee baton: no ammo, locks the horde down mid-swing.',
+    radar: { damage: 2, fireRate: 3, reloadSpeed: 5, ammoCapacity: 5, range: 1 },
+    damage: 34,
+    fireInterval: 0.42,
+    reloadTime: 0,
+    magSize: 1,
+    reserveStart: 0,
+    bulletSpeed: 0,
+    bulletLife: 0,
+    pellets: 0,
+    spread: 0,
+    tracerWidth: 0,
+    infiniteAmmo: true,
+    melee: { reach: 54, arc: Math.PI * 0.6, knockback: 14, stunChance: 0.4, stunTime: 2 },
+  },
 ]
 
-export const STARTER_WEAPONS: WeaponId[] = ['rusty-pistol', 'old-rifle']
+export const STARTER_WEAPONS: WeaponId[] = ['old-rifle', 'rusty-pistol', 'm9-sidearm']
+
+export function weaponsInSlot(slot: WeaponSlot): Weapon[] {
+  return WEAPONS.filter((w) => w.slot === slot)
+}
 
 export function weaponById(id: WeaponId): Weapon {
   const w = WEAPONS.find((weapon) => weapon.id === id)

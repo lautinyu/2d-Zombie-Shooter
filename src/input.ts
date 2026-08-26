@@ -45,6 +45,9 @@ export interface InputActions {
   p2Ability: () => void
   p1Barricade: () => void
   p2Barricade: () => void
+  /** Swap between the primary and secondary weapon slots. */
+  p1Switch: () => void
+  p2Switch: () => void
   /** Fired once per press so a very short click still sends a bullet. */
   p1Shot: () => void
   p2Shot: () => void
@@ -88,6 +91,12 @@ export function bindInput(canvas: HTMLCanvasElement, actions: InputActions) {
         actions.p2Ability()
         break
       case 'q':
+        actions.p1Switch()
+        break
+      case 'n':
+        actions.p2Switch()
+        break
+      case 'f':
         actions.p1Barricade()
         break
       case ',':
