@@ -29,6 +29,7 @@ export type SfxId =
   | 'sting'
   | 'boss-roar'
   | 'boss-dash'
+  | 'explosion'
   | 'swap'
   | 'type'
 
@@ -42,6 +43,7 @@ const SFX: Record<SfxId, SoundProfile> = {
   sting: { startFreq: 980, endFreq: 300, duration: 0.16, type: 'square', gain: 0.12 },
   'boss-roar': { startFreq: 90, endFreq: 38, duration: 1.4, type: 'sawtooth', gain: 0.26 },
   'boss-dash': { startFreq: 420, endFreq: 110, duration: 0.5, type: 'square', gain: 0.2 },
+  explosion: { startFreq: 260, endFreq: 24, duration: 1.9, type: 'sawtooth', gain: 0.32 },
   swap: { startFreq: 300, endFreq: 700, duration: 0.12, type: 'square', gain: 0.1 },
   type: { startFreq: 640, endFreq: 520, duration: 0.03, type: 'square', gain: 0.03 },
 }

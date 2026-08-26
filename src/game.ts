@@ -45,6 +45,8 @@ interface Player {
   /** Enemies the current sweep already cut, so the blade hits each once. */
   swingHits: Enemy[]
   swingHitBoss: boolean
+  /** 0→1 coating of Hive Mother residue after she bursts. */
+  gore: number
   reloadTimer: number
   fireTimer: number
   shotsFired: number
@@ -192,6 +194,18 @@ interface Boss {
   cloakTimer: number
   cloaked: boolean
   footprints: Footprint[]
+}
+
+/** Chunk of the Hive Mother thrown out by her death burst. */
+interface Gib {
+  x: number
+  y: number
+  vx: number
+  vy: number
+  r: number
+  life: number
+  decay: number
+  color: string
 }
 
 /** Venom spat by the boss; a hit counts as a sting. */
@@ -353,6 +367,9 @@ const RECOIL_RECOVERY = 7
 const MELEE_SWING_TIME = 0.22
 /** Half-width of the blade's own hit wedge as it sweeps. */
 const MELEE_BLADE_HALF = 0.35
+/** Seconds the Hive Mother's death burst plays before the outro dialogue. */
+const FINALE_BURST_TIME = 2.4
+const FINALE_GIBS = 140
 /** Dead time after a weapon swap, so switching is not a free extra shot. */
 const WEAPON_SWITCH_TIME = 0.3
 
@@ -473,6 +490,13 @@ export class Game {
   private turrets: Turret[] = []
   private medkits: Medkit[] = []
   private boss: Boss | null = null
+  private gibs: Gib[] = []
+  /**
+   * Finale death sequence: 'burst' plays the explosion with controls frozen,
+   * 'done' holds the wrecked arena still behind the outro cinematic.
+   */
+  private outro: 'off' | 'burst' | 'done' = 'off'
+  private outroTimer = 0
   private venom: Projectile[] = []
   private groanTimer = 2
   private barricades: Barricade[] = []
@@ -514,6 +538,8 @@ export class Game {
   private running = false
 
   onHud: (hud: Hud) => void = () => {}
+  /** Fires once the Hive Mother's death burst finishes, to run the outro. */
+  onFinale: () => void = () => {}
   onStateChange: (state: GameState) => void = () => {}
 
   constructor(canvas: HTMLCanvasElement) {
@@ -563,6 +589,7 @@ export class Game {
       swingDir: 1,
       swingHits: [],
       swingHitBoss: false,
+      gore: 0,
       reloadTimer: 0,
       fireTimer: 0,
       shotsFired: 0,
@@ -673,6 +700,9 @@ export class Game {
     this.medkits = []
     this.barricades = []
     this.venom = []
+    this.gibs = []
+    this.outro = 'off'
+    this.outroTimer = 0
     this.boss = null
     this.groanTimer = 2
     this.chaseField = null
@@ -914,6 +944,10 @@ export class Game {
   }
 
   private update(dt: number) {
+    if (this.outro !== 'off') {
+      this.updateFinale(dt)
+      return
+    }
     this.shake = Math.max(0, this.shake - dt * 1.6)
     this.bubbleTimer = Math.max(0, this.bubbleTimer - dt)
     this.cameraEase = Math.max(0, this.cameraEase - dt)
@@ -1042,6 +1076,10 @@ export class Game {
       }
     } else if (mission.type === 'boss') {
       if (this.boss && this.boss.hp <= 0) {
+        if (this.boss.kind === 'hive-mother') {
+          this.startFinaleBurst(this.boss)
+          return
+        }
         this.boss = null
         this.finish('won')
         return
@@ -1075,6 +1113,71 @@ export class Game {
   private finish(state: GameState) {
     this.running = false
     this.setState(state)
+  }
+
+  /** Ends the run after the outro cinematic has played out. */
+  finishFinale() {
+    this.outro = 'off'
+    this.finish('won')
+  }
+
+  /**
+   * The Hive Mother tears apart: the arena is swept clear, her innards spray
+   * across the survivors and controls stay frozen until the cinematic opens.
+   */
+  private startFinaleBurst(boss: Boss) {
+    this.outro = 'burst'
+    this.outroTimer = FINALE_BURST_TIME
+    this.shake = 2
+    this.enemies = []
+    this.bullets = []
+    this.venom = []
+    this.boss = null
+    clearInput()
+    playSfx('explosion')
+    playSfx('boss-roar')
+
+    for (let i = 0; i < FINALE_GIBS; i++) {
+      const a = Math.random() * Math.PI * 2
+      const speed = 120 + Math.random() * 520
+      this.gibs.push({
+        x: boss.x,
+        y: boss.y,
+        vx: Math.cos(a) * speed,
+        vy: Math.sin(a) * speed,
+        r: 3 + Math.random() * 9,
+        life: 1,
+        decay: 0.35 + Math.random() * 0.5,
+        color: Math.random() < 0.55 ? '#5ff07a' : '#fb923c',
+      })
+    }
+
+    for (const p of this.players) {
+      p.shooting = false
+      p.swinging = false
+      if (!p.down) p.gore = 1
+    }
+  }
+
+  /** Only the debris moves while the finale burst and cinematic play. */
+  private updateFinale(dt: number) {
+    this.shake = Math.max(0, this.shake - dt * 1.1)
+    for (let i = this.gibs.length - 1; i >= 0; i--) {
+      const g = this.gibs[i]
+      g.x += g.vx * dt
+      g.y += g.vy * dt
+      g.vx *= 1 - Math.min(1, dt * 2.2)
+      g.vy *= 1 - Math.min(1, dt * 2.2)
+      g.life -= g.decay * dt
+      if (g.life <= 0) this.gibs.splice(i, 1)
+    }
+    this.updateCamera()
+    if (this.outro !== 'burst') return
+    this.outroTimer -= dt
+    if (this.outroTimer <= 0) {
+      this.outro = 'done'
+      this.onFinale()
+    }
   }
 
   /** Triggers the character's active ability for that player. */
@@ -2257,6 +2360,7 @@ export class Game {
 
     if (this.boss) this.drawBoss(this.boss)
     for (const v of this.venom) this.drawVenom(v)
+    for (const g of this.gibs) this.drawGib(g)
 
     for (const b of this.bullets) {
       ctx.strokeStyle = b.color
@@ -2274,6 +2378,7 @@ export class Game {
     for (const p of this.players) {
       this.drawGroundShadow(p.x, p.y, p.r)
       this.drawPlayer(p)
+      if (p.gore > 0) this.drawGore(p)
     }
     if (this.bubbleTimer > 0) this.drawRevealBubble()
     ctx.restore()
@@ -2526,6 +2631,43 @@ export class Game {
     ctx.strokeStyle = 'rgba(30,60,0,0.8)'
     ctx.lineWidth = 1.5
     ctx.stroke()
+    ctx.restore()
+  }
+
+  /** A chunk of the burst boss, fading as it flies. */
+  private drawGib(g: Gib) {
+    const ctx = this.ctx
+    ctx.save()
+    ctx.globalAlpha = Math.max(0, Math.min(1, g.life))
+    ctx.fillStyle = g.color
+    ctx.beginPath()
+    ctx.arc(g.x, g.y, g.r, 0, Math.PI * 2)
+    ctx.fill()
+    ctx.restore()
+  }
+
+  /** Boss residue sprayed over a survivor once the hive bursts. */
+  private drawGore(p: Player) {
+    const ctx = this.ctx
+    ctx.save()
+    ctx.translate(p.x, this.textures === 'enhanced' ? p.y - UNIT_LIFT : p.y)
+    ctx.globalAlpha = 0.72 * p.gore
+    ctx.fillStyle = '#4ade80'
+    ctx.beginPath()
+    ctx.arc(0, 0, p.r, 0, Math.PI * 2)
+    ctx.fill()
+    ctx.fillStyle = '#166534'
+    const blobs: [number, number, number][] = [
+      [-0.5, -0.4, 0.34],
+      [0.45, -0.2, 0.28],
+      [0.05, 0.55, 0.3],
+      [-0.3, 0.35, 0.22],
+    ]
+    for (const [bx, by, br] of blobs) {
+      ctx.beginPath()
+      ctx.arc(bx * p.r, by * p.r, br * p.r, 0, Math.PI * 2)
+      ctx.fill()
+    }
     ctx.restore()
   }
 

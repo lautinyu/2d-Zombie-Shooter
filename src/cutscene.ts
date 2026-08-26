@@ -18,12 +18,21 @@ const STORY_DURATION = 22000
 interface Line {
   speaker: string
   text: string
-  side: 'left' | 'right'
+  /** 'system' lines are machine readouts, rendered in glowing yellow. */
+  side: 'left' | 'right' | 'system'
 }
+
+/** Closing crawl after the Hive Mother falls. */
+const CREDIT_LINES = [
+  'To Be Continued in Chapter 2: Project Horizon...',
+  'Thank you for playing!',
+]
+
+const CREDIT_DURATION = 8000
 
 const TYPE_SPEED = 18
 
-function build(): { story: HTMLElement; dialogue: HTMLElement } {
+function build(): { story: HTMLElement; dialogue: HTMLElement; credits: HTMLElement } {
   const host = document.querySelector('#app')
   if (!host) throw new Error('#app container missing')
 
@@ -55,7 +64,7 @@ function build(): { story: HTMLElement; dialogue: HTMLElement } {
         <canvas id="cutscene-portrait" width="140" height="140" class="rounded-2xl bg-black/50 ring-1 ring-emerald-400/40"></canvas>
         <div id="cutscene-portrait-name" class="mt-2 text-sm font-bold text-emerald-300"></div>
       </div>
-      <div class="text-center">
+      <div id="cutscene-survivor-group" class="text-center">
         <canvas id="cutscene-survivors" width="260" height="140" class="rounded-2xl bg-black/50 ring-1 ring-sky-400/30"></canvas>
         <div class="mt-2 text-sm font-bold text-sky-300">Survivors of the district</div>
       </div>
@@ -67,13 +76,27 @@ function build(): { story: HTMLElement; dialogue: HTMLElement } {
     </div>
   `
   host.appendChild(dialogue)
-  return { story, dialogue }
+
+  const credits = document.createElement('div')
+  credits.id = 'credits'
+  credits.className = 'absolute inset-0 z-40 hidden overflow-hidden bg-black'
+  credits.innerHTML = `
+    <div class="absolute inset-0 flex justify-center overflow-hidden">
+      <div id="credits-crawl" class="max-w-2xl px-8 text-center">
+        ${CREDIT_LINES.map(
+          (l) => `<p class="mb-10 text-3xl font-black leading-relaxed text-white">${l}</p>`
+        ).join('')}
+      </div>
+    </div>
+  `
+  host.appendChild(credits)
+  return { story, dialogue, credits }
 }
 
-let panels: { story: HTMLElement; dialogue: HTMLElement } | null = null
+let panels: { story: HTMLElement; dialogue: HTMLElement; credits: HTMLElement } | null = null
 
 /** Built on first use: main.ts replaces #app's markup during boot. */
-function panelsReady(): { story: HTMLElement; dialogue: HTMLElement } {
+function panelsReady(): { story: HTMLElement; dialogue: HTMLElement; credits: HTMLElement } {
   if (!panels) panels = build()
   return panels
 }
@@ -230,12 +253,91 @@ function drawSurvivors() {
   })
 }
 
+/** The vision the hive mind burns into the survivor as it dies. */
+function outroDialogue(id: CharacterId): Line[] {
+  const hero = characterById(id).name
+  return [
+    {
+      speaker: hero,
+      text: "*Coughing*... It's down... The hive mind is breaking. But what is this sludge? It's... burning through my visor...",
+      side: 'left',
+    },
+    {
+      speaker: 'System',
+      text: '[CORRUPTIVE BIO-LINK ESTABLISHED: RECOVERING EXPERIMENTAL MEMORY DATA...]',
+      side: 'system',
+    },
+    {
+      speaker: hero,
+      text: "Arrgh! My head... I'm seeing something. It's a vision... or a memory from the virus itself. A massive, high-tech fortress hidden deep in the frozen mountains...",
+      side: 'left',
+    },
+    {
+      speaker: 'Survivor (radio)',
+      text: 'Team! Do you copy? The swarm outside our perimeter just collapsed! You did it! What is your status?',
+      side: 'right',
+    },
+    {
+      speaker: hero,
+      text: "The Hive Mother is dead, but this isn't over. The virus didn't evolve naturally. I just saw the birthplace of the plague. An underground corporate facility called 'Project Horizon' located 200 miles north.",
+      side: 'left',
+    },
+    {
+      speaker: 'Survivor (radio)',
+      text: "An underground lab? That area was locked down by the military years ago. It's completely overrun by tier-4 mutations!",
+      side: 'right',
+    },
+    {
+      speaker: hero,
+      text: "Then pack your winter gear and load up the heavy ammunition. We're going to the source. Fire up the transport vehicle... we have a new destination.",
+      side: 'left',
+    },
+  ]
+}
+
+/**
+ * Ending cinematic: the vision dialogue over the frozen arena, then a crawl
+ * that fades to black and hands back to the menu.
+ */
+export function playOutro(id: CharacterId, onDone: () => void) {
+  runDialogue(id, outroDialogue(id), true, () => playCredits(onDone))
+}
+
+function playCredits(onDone: () => void) {
+  const { credits } = panelsReady()
+  show(credits, true, 'block')
+  const crawl = document.getElementById('credits-crawl')
+  if (!crawl) throw new Error('credits markup missing')
+  crawl.animate([{ transform: 'translateY(100vh)' }, { transform: 'translateY(-40vh)' }], {
+    duration: CREDIT_DURATION,
+    easing: 'linear',
+    fill: 'forwards',
+  })
+  window.setTimeout(() => {
+    show(credits, false, 'block')
+    stopMusic()
+    onDone()
+  }, CREDIT_DURATION)
+}
+
 /** Typewriter dialogue before the finale; resolves when the last line is read. */
 export function playBossDialogue(id: CharacterId, boss: BossKind, onDone: () => void) {
+  runDialogue(id, bossDialogue(id, boss), false, onDone)
+}
+
+/**
+ * Drives one typewriter dialogue. `overlay` keeps the arena visible behind a
+ * dimmed panel instead of covering it with the solid cutscene background.
+ */
+function runDialogue(id: CharacterId, lines: Line[], overlay: boolean, onDone: () => void) {
   resumeAudio()
   playMusic('story')
-  const lines = bossDialogue(id, boss)
   const { dialogue } = panelsReady()
+  dialogue.className = `absolute inset-0 z-40 hidden cursor-pointer flex-col justify-end p-8 ${
+    overlay ? 'bg-slate-950/60' : 'bg-slate-950/95'
+  }`
+  // Radio voices during the outro: no survivor sprites on screen.
+  document.getElementById('cutscene-survivor-group')?.classList.toggle('hidden', overlay)
   const speakerEl = document.getElementById('cutscene-speaker')
   const textEl = document.getElementById('cutscene-text')
   const nameEl = document.getElementById('cutscene-portrait-name')
@@ -269,8 +371,16 @@ export function playBossDialogue(id: CharacterId, boss: BossKind, onDone: () => 
     const line = lines[index]
     speaker.textContent = line.speaker
     speaker.className = `text-sm font-black uppercase tracking-widest ${
-      line.side === 'left' ? 'text-emerald-300' : 'text-sky-300'
+      line.side === 'left'
+        ? 'text-emerald-300'
+        : line.side === 'system'
+          ? 'text-yellow-300'
+          : 'text-sky-300'
     }`
+    body.className =
+      line.side === 'system'
+        ? 'mt-2 min-h-[72px] font-mono text-lg leading-relaxed text-yellow-300 [text-shadow:0_0_12px_rgba(250,204,21,0.9)]'
+        : 'mt-2 min-h-[72px] text-lg leading-relaxed text-slate-100'
     typed = 0
     body.textContent = ''
     stopTyping()

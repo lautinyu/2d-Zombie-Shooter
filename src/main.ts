@@ -21,7 +21,7 @@ import type { CharacterId } from './characters'
 import { TEXTURE_PACKS } from './theme'
 import type { TexturePack } from './theme'
 import { playMusic, resumeAudio, stopMusic } from './audio'
-import { playBossDialogue, playStoryIntro } from './cutscene'
+import { playBossDialogue, playOutro, playStoryIntro } from './cutscene'
 
 declare global {
   interface Window {
@@ -749,6 +749,15 @@ function show(node: HTMLElement, visible: boolean, display: 'flex' | 'block' = '
   else node.classList.remove(display)
 }
 
+/** True while the ending cinematic is running, so the win screen is skipped. */
+let finaleOutro = false
+
+// The Hive Mother's burst hands over to the vision dialogue and credit crawl.
+game.onFinale = () => {
+  finaleOutro = true
+  playOutro(activeCharacter(), () => game.finishFinale())
+}
+
 game.onStateChange = (state: GameState) => {
   show(hud, state === 'playing', 'block')
   show(menu, state === 'menu')
@@ -775,6 +784,13 @@ game.onStateChange = (state: GameState) => {
         ? `+${total} scrap earned (${game.scrapEarned} from kills, ${bonus} mission bonus)`
         : `+${total} scrap salvaged from kills`
     el(state === 'won' ? 'win-reward' : 'lose-reward').textContent = rewardText
+  }
+  if (state === 'won' && finaleOutro) {
+    // The ending already told the story: bank the scrap and go straight back.
+    finaleOutro = false
+    show(winScreen, false)
+    game.toMenu()
+    return
   }
   if (state === 'won') {
     const where = missionMapName(currentMission)
@@ -985,7 +1001,7 @@ game.onHud = (h: Hud) => {
     missionBar.style.width = `${total ? (h.extracted / total) * 100 : 0}%`
   } else {
     killText.textContent = h.boss
-      ? `Hive Mother: ${Math.round((h.boss.hp / h.boss.maxHp) * 100)}%`
+      ? `${h.boss.name}: ${Math.round((h.boss.hp / h.boss.maxHp) * 100)}%`
       : `Zombies Cleared: ${h.kills}/${h.target}`
     missionBar.style.width = h.boss
       ? `${100 - (h.boss.hp / h.boss.maxHp) * 100}%`
