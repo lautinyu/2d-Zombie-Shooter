@@ -23,10 +23,17 @@ interface Line {
 }
 
 /** Closing crawl after the Hive Mother falls. */
-const CREDIT_LINES = [
-  'To Be Continued in Chapter 2: Project Horizon...',
-  'Thank you for playing!',
-]
+const CREDIT_LINES: Record<'chapter1' | 'chapter2', string[]> = {
+  chapter1: [
+    'To Be Continued in Chapter 2: Project Horizon...',
+    'Thank you for playing!',
+  ],
+  chapter2: [
+    'Chapter 2 Cleared.',
+    'Prepare for Chapter 3: The Primeval Canopy...',
+    'Your data progression has been saved!',
+  ],
+}
 
 const CREDIT_DURATION = 8000
 
@@ -83,9 +90,7 @@ function build(): { story: HTMLElement; dialogue: HTMLElement; credits: HTMLElem
   credits.innerHTML = `
     <div class="absolute inset-0 flex justify-center overflow-hidden">
       <div id="credits-crawl" class="max-w-2xl px-8 text-center">
-        ${CREDIT_LINES.map(
-          (l) => `<p class="mb-10 text-3xl font-black leading-relaxed text-white">${l}</p>`
-        ).join('')}
+
       </div>
     </div>
   `
@@ -329,19 +334,73 @@ function outroDialogue(id: CharacterId): Line[] {
   ]
 }
 
-/**
- * Ending cinematic: the vision dialogue over the frozen arena, then a crawl
- * that fades to black and hands back to the menu.
- */
-export function playOutro(id: CharacterId, onDone: () => void) {
-  runDialogue(id, outroDialogue(id), true, () => playCredits(onDone))
+/** The bunker interrogation after the Cryo-Stalker falls. */
+function cryoOutroDialogue(id: CharacterId): Line[] {
+  const hero = characterById(id).name
+  return [
+    {
+      speaker: hero,
+      text: "It's over... the frost core is secure. Open the bunker doors and start talking. Why did you people create that abomination?!",
+      side: 'left',
+    },
+    {
+      speaker: 'Hidden Researcher 1',
+      text: "Create it?! You don't understand... we didn't engineer this virus. We didn't make the plague bugs!",
+      side: 'right',
+    },
+    {
+      speaker: hero,
+      text: "Don't lie to me. Your computer logs show the genetic splices!",
+      side: 'left',
+    },
+    {
+      speaker: 'Hidden Researcher 2',
+      text: 'We only experimented on what we uncovered! The original plague bugs were found deep underground, frozen in an ancient ice shelf. We were just trying to isolate the venom, but the source... the source is far older and completely unnatural.',
+      side: 'right',
+    },
+    {
+      speaker: hero,
+      text: "If you didn't engineer it, then what is this... wait. Look at the monster's ruptured stomach lining. What is that trapped inside the biological tissue?",
+      side: 'left',
+    },
+    {
+      speaker: 'Hidden Researcher 1',
+      text: 'Is that... a fossilized bone structure? No, look at the fur pattern. That animal is completely native to the tropical rainforest regions thousands of miles south!',
+      side: 'right',
+    },
+    {
+      speaker: hero,
+      text: 'A tropical creature preserved inside a sub-zero arctic mutation... This means the virus didn\'t originate in the north. The hive network spans across the entire globe.',
+      side: 'left',
+    },
+    {
+      speaker: hero,
+      text: 'Change of plans, team. Seal this lab. We are heading south to the equator. We need to find the primeval nesting grounds.',
+      side: 'left',
+    },
+  ]
 }
 
-function playCredits(onDone: () => void) {
+/**
+ * Ending cinematic: the closing dialogue over the wrecked arena, then a crawl
+ * that fades to black and hands back to the menu.
+ */
+export function playOutro(id: CharacterId, boss: BossKind, onDone: () => void) {
+  const chapter2 = boss === 'cryo-stalker'
+  const lines = chapter2 ? cryoOutroDialogue(id) : outroDialogue(id)
+  runDialogue(id, lines, true, () =>
+    playCredits(chapter2 ? 'chapter2' : 'chapter1', onDone)
+  )
+}
+
+function playCredits(chapter: 'chapter1' | 'chapter2', onDone: () => void) {
   const { credits } = panelsReady()
   show(credits, true, 'block')
   const crawl = document.getElementById('credits-crawl')
   if (!crawl) throw new Error('credits markup missing')
+  crawl.innerHTML = CREDIT_LINES[chapter]
+    .map((l) => `<p class="mb-10 text-3xl font-black leading-relaxed text-white">${l}</p>`)
+    .join('')
   crawl.animate([{ transform: 'translateY(100vh)' }, { transform: 'translateY(-40vh)' }], {
     duration: CREDIT_DURATION,
     easing: 'linear',

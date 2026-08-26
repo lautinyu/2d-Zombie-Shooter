@@ -532,6 +532,8 @@ const STALKER_VISIBLE_TIME = 6
 const STALKER_BACKSTAB_DAMAGE = 38
 const STALKER_FOOTPRINT_INTERVAL = 0.28
 const STALKER_FOOTPRINT_LIFE = 3
+/** Fraction of an overlap resolved per frame when two bodies interpenetrate. */
+const SEPARATION_PUSH = 0.5
 /** Cryo-Stalker: freeze slams and piercing icicles inside the frost core. */
 const CRYO_STALKER_MAX_HP = 2000
 const CRYO_STALKER_RADIUS = 52
@@ -601,6 +603,10 @@ export class Game {
    */
   private outro: 'off' | 'burst' | 'done' = 'off'
   private outroTimer = 0
+  /** Which boss's death is playing out, so the right ending runs. */
+  private finaleBoss: BossKind = 'hive-mother'
+  /** Splatter tint: hive innards are green, the Cryo-Stalker's are icy. */
+  private goreColor = '#4ade80'
   private venom: Projectile[] = []
   private shards: Shard[] = []
   private shocks: Shock[] = []
@@ -648,8 +654,8 @@ export class Game {
   private running = false
 
   onHud: (hud: Hud) => void = () => {}
-  /** Fires once the Hive Mother's death burst finishes, to run the outro. */
-  onFinale: () => void = () => {}
+  /** Fires once a chapter boss's death burst finishes, to run the outro. */
+  onFinale: (boss: BossKind) => void = () => {}
   onStateChange: (state: GameState) => void = () => {}
 
   constructor(canvas: HTMLCanvasElement) {
@@ -1143,6 +1149,7 @@ export class Game {
     this.updateSurvivors(dt)
     this.updateTurrets(dt)
     this.updateEnemies(dt)
+    this.separateBodies()
     this.updatePickups(dt)
     this.updateAcid(dt)
     this.updateBlasts(dt)
@@ -1282,7 +1289,9 @@ export class Game {
       }
     } else if (mission.type === 'boss') {
       if (this.boss && this.boss.hp <= 0) {
-        if (this.boss.kind === 'hive-mother') {
+        // Chapter bosses close their chapter with a cinematic instead of the
+        // usual win screen.
+        if (this.boss.kind === 'hive-mother' || this.boss.kind === 'cryo-stalker') {
           this.startFinaleBurst(this.boss)
           return
         }
@@ -1328,10 +1337,11 @@ export class Game {
   }
 
   /**
-   * The Hive Mother tears apart: the arena is swept clear, her innards spray
+   * The chapter boss tears apart: the arena is swept clear, its innards spray
    * across the survivors and controls stay frozen until the cinematic opens.
    */
   private startFinaleBurst(boss: Boss) {
+    this.finaleBoss = boss.kind
     this.outro = 'burst'
     this.outroTimer = FINALE_BURST_TIME
     this.shake = 2
@@ -1345,6 +1355,7 @@ export class Game {
     playSfx('explosion')
     playSfx('boss-roar')
 
+    const frost = boss.kind === 'cryo-stalker'
     for (let i = 0; i < FINALE_GIBS; i++) {
       const a = Math.random() * Math.PI * 2
       const speed = 120 + Math.random() * 520
@@ -1356,7 +1367,13 @@ export class Game {
         r: 3 + Math.random() * 9,
         life: 1,
         decay: 0.35 + Math.random() * 0.5,
-        color: Math.random() < 0.55 ? '#5ff07a' : '#fb923c',
+        color: frost
+          ? Math.random() < 0.55
+            ? '#bae6fd'
+            : '#38bdf8'
+          : Math.random() < 0.55
+            ? '#5ff07a'
+            : '#fb923c',
       })
     }
 
@@ -1365,6 +1382,7 @@ export class Game {
       p.swinging = false
       if (!p.down) p.gore = 1
     }
+    this.goreColor = frost ? '#7dd3fc' : '#4ade80'
   }
 
   /** Only the debris moves while the finale burst and cinematic play. */
@@ -1384,7 +1402,7 @@ export class Game {
     this.outroTimer -= dt
     if (this.outroTimer <= 0) {
       this.outro = 'done'
-      this.onFinale()
+      this.onFinale(this.finaleBoss)
     }
   }
 
@@ -1591,6 +1609,35 @@ export class Game {
     if (dy) {
       const ny = clamp(z.y + dy, z.r, m.height - z.r)
       if (!circleHitsWall(m, z.x, ny, z.r) && !this.hitsBarricade(z.x, ny, z.r)) z.y = ny
+    }
+  }
+
+  /**
+   * Pushes overlapping enemies and survivors apart so a crowd spreads out
+   * side by side instead of collapsing into one unshootable point.
+   */
+  private separateBodies() {
+    const bodies: { x: number; y: number; r: number }[] = [...this.enemies]
+    for (const s of this.survivors) {
+      if (!s.safe && s.hp > 0) bodies.push(s)
+    }
+    for (let i = 0; i < bodies.length; i++) {
+      for (let j = i + 1; j < bodies.length; j++) {
+        const a = bodies[i]
+        const b = bodies[j]
+        const min = a.r + b.r
+        const dx = b.x - a.x
+        const dy = b.y - a.y
+        const d = Math.hypot(dx, dy)
+        if (d >= min) continue
+        // Exactly coincident bodies need an arbitrary axis to split along.
+        const angle = d < 0.001 ? Math.random() * Math.PI * 2 : Math.atan2(dy, dx)
+        const push = ((min - Math.min(d, min)) * SEPARATION_PUSH) / 2
+        const ux = Math.cos(angle) * push
+        const uy = Math.sin(angle) * push
+        this.moveCircle(a, -ux, -uy)
+        this.moveCircle(b, ux, uy)
+      }
     }
   }
 
@@ -3122,7 +3169,7 @@ export class Game {
     ctx.save()
     ctx.translate(p.x, this.textures === 'enhanced' ? p.y - UNIT_LIFT : p.y)
     ctx.globalAlpha = 0.72 * p.gore
-    ctx.fillStyle = '#4ade80'
+    ctx.fillStyle = this.goreColor
     ctx.beginPath()
     ctx.arc(0, 0, p.r, 0, Math.PI * 2)
     ctx.fill()

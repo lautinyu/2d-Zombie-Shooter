@@ -863,10 +863,10 @@ function show(node: HTMLElement, visible: boolean, display: 'flex' | 'block' = '
 /** True while the ending cinematic is running, so the win screen is skipped. */
 let finaleOutro = false
 
-// The Hive Mother's burst hands over to the vision dialogue and credit crawl.
-game.onFinale = () => {
+// A chapter boss's burst hands over to its dialogue and credit crawl.
+game.onFinale = (boss) => {
   finaleOutro = true
-  playOutro(activeCharacter(), () => game.finishFinale())
+  playOutro(activeCharacter(), boss, () => game.finishFinale())
 }
 
 game.onStateChange = (state: GameState) => {
