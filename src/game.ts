@@ -3,7 +3,9 @@ import type { MeleeProfile, Weapon } from './weapons'
 import { weaponById } from './weapons'
 import type { Character } from './characters'
 import { characterById } from './characters'
-import { SCRAP_PER_BUG, SCRAP_PER_KILL } from './profile'
+import { CH2_DAMAGE_SCALE, CH2_HP_SCALE } from './missions'
+import { CHIPS_PER_KILL, SCRAP_PER_BUG, SCRAP_PER_KILL } from './profile'
+import { CRYO_SLOW, CRYO_SLOW_TIME } from './weapons'
 import { playMusic, playSfx, playShot } from './audio'
 import type { TexturePack } from './theme'
 import { BUILDING_HEIGHT, MAX_BUILDING_LIFT, UNIT_LIFT } from './theme'
@@ -67,6 +69,8 @@ interface Player {
   barricadeCharges: number
   /** 1 right after a shot, decaying to 0 — drives the hand kickback. */
   recoil: number
+  /** Seconds of trigger hold banked by a charge-up weapon. */
+  charge: number
 }
 
 /** One carried weapon and the ammo left in it. */
@@ -96,8 +100,39 @@ interface Enemy {
   driftAngle: number
   /** Camo zombies drop their disguise once they close in, and stay revealed. */
   revealed: boolean
-  /** Seconds frozen solid by a Stun Baton hit. */
+  /** Seconds frozen solid by a Stun Baton hit or a cryo blast. */
   stun: number
+  /** Seconds left of a cryo bullet's movement slow. */
+  slow: number
+}
+
+/** The power generator defended on 'generator' missions. */
+interface Generator {
+  x: number
+  y: number
+  r: number
+  hp: number
+  maxHp: number
+  /** Brief flash after taking a hit. */
+  hurt: number
+}
+
+/** Expanding cryo shockwave drawn after a canister detonates. */
+interface Blast {
+  x: number
+  y: number
+  r: number
+  life: number
+  maxLife: number
+}
+
+/** Whatever an enemy is currently walking at. */
+interface EnemyTarget {
+  x: number
+  y: number
+  survivor: Survivor | null
+  player: Player | null
+  generator: Generator | null
 }
 
 /** Acid left by enemies killed under the Toxic Blood mutation. */
@@ -228,6 +263,13 @@ interface Bullet {
   pierce: boolean
   poison: boolean
   ignite: boolean
+  /** Slows whatever it hits by CRYO_SLOW for CRYO_SLOW_TIME seconds. */
+  cryo: boolean
+  /** Thermal beams cut straight through hardened shells. */
+  ignoreArmour: boolean
+  /** Detonation radius on impact; 0 for ordinary rounds. */
+  blast: number
+  blastFreeze: number
   color: string
   width: number
   hit: Set<Enemy>
@@ -285,6 +327,17 @@ export interface HudPlayer {
   ability: HudAbility
 }
 
+/** Countdown shown across the top of the HUD on Hold the Line missions. */
+export interface HudHold {
+  time: number
+  total: number
+}
+
+export interface HudGenerator {
+  hp: number
+  maxHp: number
+}
+
 export interface HudBoss {
   name: string
   hp: number
@@ -304,6 +357,10 @@ export interface HudMutation {
 export interface Hud {
   players: HudPlayer[]
   boss: HudBoss | null
+  hold: HudHold | null
+  generator: HudGenerator | null
+  /** Frozen Data Chips banked so far this mission. */
+  chips: number
   mutation: HudMutation | null
   kills: number
   target: number
@@ -319,7 +376,7 @@ export interface Hud {
   isProtect: boolean
 }
 
-export type DeathCause = 'wounds' | 'infection' | 'survivor'
+export type DeathCause = 'wounds' | 'infection' | 'survivor' | 'generator'
 
 const PLAYER_RADIUS = 16
 const PLAYER_BASE_SPEED = 260
@@ -372,6 +429,14 @@ const FINALE_BURST_TIME = 2.4
 const FINALE_GIBS = 140
 /** Dead time after a weapon swap, so switching is not a free extra shot. */
 const WEAPON_SWITCH_TIME = 0.3
+/** Generator missions: the horde beelines for the generator over survivors. */
+const GENERATOR_RADIUS = 54
+const GENERATOR_AGGRO_BIAS = 1.6
+const GENERATOR_ZOMBIE_DAMAGE = 26
+const GENERATOR_BUG_DAMAGE = 18
+const BLAST_LIFE = 0.35
+/** Hold the Line: how much the wave pressure ramps by the final second. */
+const HOLD_RAMP = 2.2
 
 const MUTATION_SKINS: Record<MutationId, { body: string; trim: string }> = {
   'hyper-speed': { body: '#a855f7', trim: '#e9d5ff' },
@@ -472,6 +537,8 @@ export class Game {
   mission: Mission | null = null
   kills = 0
   scrapEarned = 0
+  /** Frozen Data Chips banked from chapter 2 kills. */
+  chipsEarned = 0
   extracted = 0
   deathCause: DeathCause = 'wounds'
   weapon: Weapon = weaponById('rusty-pistol')
@@ -504,6 +571,10 @@ export class Game {
   private chaseField: FlowField | null = null
   private chaseTimer = 0
   private acid: AcidPool[] = []
+  private blasts: Blast[] = []
+  private generator: Generator | null = null
+  /** Seconds left on a Hold the Line siege. */
+  private holdTimer = 0
   private mutation: Mutation | null = null
   private mutationTimer = MUTATION_INTERVAL
   /** Seconds left on the "Virus Mutating!" HUD alert. */
@@ -605,6 +676,7 @@ export class Game {
       abilityCharges: character.ability.charges > 0 ? character.ability.charges : -1,
       barricadeCharges: character.barricades,
       recoil: 0,
+      charge: 0,
     }
   }
 
@@ -689,6 +761,7 @@ export class Game {
     this.map = mapById(mission.map)
     this.kills = 0
     this.scrapEarned = 0
+    this.chipsEarned = 0
     this.extracted = 0
     this.spawned = 0
     this.spawnTimer = 0
@@ -708,6 +781,8 @@ export class Game {
     this.chaseField = null
     this.chaseTimer = 0
     this.acid = []
+    this.blasts = []
+    this.holdTimer = mission.holdTime ?? 0
     this.mutation = null
     this.mutationTimer = MUTATION_INTERVAL
     this.mutationAlert = 0
@@ -762,6 +837,19 @@ export class Game {
     if (mission.type === 'boss') {
       this.boss = this.makeBoss(mission.boss ?? 'hive-mother')
     }
+
+    // The generator sits dead centre; the camp is built around defending it.
+    this.generator =
+      mission.type === 'generator'
+        ? {
+            x: this.map.width / 2,
+            y: this.map.height / 2,
+            r: GENERATOR_RADIUS,
+            hp: mission.generatorHp ?? 1000,
+            maxHp: mission.generatorHp ?? 1000,
+            hurt: 0,
+          }
+        : null
 
     playMusic(mission.type === 'boss' ? 'boss' : 'battle')
     this.setState('playing')
@@ -915,6 +1003,14 @@ export class Game {
               alert: this.mutationAlert > 0,
             }
           : null,
+      hold:
+        mission?.type === 'hold'
+          ? { time: Math.max(0, this.holdTimer), total: mission.holdTime ?? 0 }
+          : null,
+      generator: this.generator
+        ? { hp: Math.max(0, Math.round(this.generator.hp)), maxHp: this.generator.maxHp }
+        : null,
+      chips: this.chipsEarned,
       boss: this.boss
         ? {
             name: this.boss.name,
@@ -929,8 +1025,11 @@ export class Game {
       objective: mission?.objective ?? '',
       mapName: this.map.name,
       maxStings: MAX_STINGS,
-      weaponName: this.weapon.name,
-      perkName: this.weapon.perk === 'none' ? '' : this.weapon.perkName,
+      weaponName: (this.p1?.weapon ?? this.weapon).name,
+      perkName:
+        (this.p1?.weapon ?? this.weapon).perk === 'none'
+          ? ''
+          : (this.p1?.weapon ?? this.weapon).perkName,
       scrap: this.scrapEarned,
       survivors: this.survivors.map((s) => ({
         hp: Math.max(0, Math.round(s.hp)),
@@ -976,7 +1075,10 @@ export class Game {
     this.updateEnemies(dt)
     this.updatePickups(dt)
     this.updateAcid(dt)
+    this.updateBlasts(dt)
     this.updateMutation(dt)
+    if (this.generator) this.generator.hurt = Math.max(0, this.generator.hurt - dt)
+    if (this.mission?.type === 'hold') this.holdTimer = Math.max(0, this.holdTimer - dt)
     this.updateSpawning(dt)
     this.updateCamera()
     this.updateAmbience(dt)
@@ -1051,6 +1153,25 @@ export class Game {
     }
   }
 
+  /** Cryo shockwaves are pure decoration once their damage has landed. */
+  private updateBlasts(dt: number) {
+    for (let i = this.blasts.length - 1; i >= 0; i--) {
+      const b = this.blasts[i]
+      b.life -= dt
+      if (b.life <= 0) this.blasts.splice(i, 1)
+    }
+  }
+
+  /** Chapter 2 mutations carry 50% more health than their chapter 1 kin. */
+  private get hpScale(): number {
+    return this.mission?.chapter === 2 ? CH2_HP_SCALE : 1
+  }
+
+  /** ...and hit 30% harder. */
+  private get damageScale(): number {
+    return this.mission?.chapter === 2 ? CH2_DAMAGE_SCALE : 1
+  }
+
   /** Occasional groans from the horde while enemies are around. */
   private updateAmbience(dt: number) {
     if (!this.enemies.length) return
@@ -1071,6 +1192,21 @@ export class Game {
         return
       }
       if (this.survivors.length && this.survivors.every((s) => s.safe)) {
+        this.finish('won')
+        return
+      }
+    } else if (mission.type === 'hold') {
+      if (this.holdTimer <= 0) {
+        this.finish('won')
+        return
+      }
+    } else if (mission.type === 'generator') {
+      if (this.generator && this.generator.hp <= 0) {
+        this.deathCause = 'generator'
+        this.finish('lost')
+        return
+      }
+      if (this.kills >= mission.target) {
         this.finish('won')
         return
       }
@@ -1415,6 +1551,28 @@ export class Game {
       }
       return
     }
+    const charge = p.weapon.chargeTime
+    if (charge) {
+      // Charge weapons bank trigger time and release once the coil is full.
+      if (!p.shooting && !p.queuedShot) {
+        p.charge = Math.max(0, p.charge - dt * 2)
+        return
+      }
+      if (p.mag <= 0) {
+        p.queuedShot = false
+        p.charge = 0
+        this.startReload(p)
+        return
+      }
+      p.charge += dt
+      if (p.charge < charge || p.fireTimer > 0) return
+      p.charge = 0
+      p.queuedShot = false
+      this.fire(p)
+      p.fireTimer = p.weapon.fireInterval
+      return
+    }
+    p.charge = 0
     if ((p.shooting || p.queuedShot) && p.fireTimer === 0) {
       if (p.mag > 0) {
         this.fire(p)
@@ -1435,6 +1593,7 @@ export class Game {
       return
     }
     const acidShot = w.perk === 'acidic-spray' && p.shotsFired % ACID_SHOT_INTERVAL === 0
+    const cryoShot = Boolean(w.cryoEvery) && p.shotsFired % (w.cryoEvery ?? 1) === 0
     const overdrive = p.character.id === 'army-retiree' && p.abilityActive > 0
     const damage = w.damage * (overdrive ? OVERDRIVE_DAMAGE : 1)
 
@@ -1450,19 +1609,30 @@ export class Game {
         life: w.bulletLife,
         maxLife: w.bulletLife,
         falloff: w.falloff ?? 1,
-        tracerLength: w.perk === 'armor-piercing' ? 56 : w.pellets > 1 ? 10 : 18,
+        tracerLength:
+          w.perk === 'thermal-lance' ? 120 : w.perk === 'armor-piercing' ? 56 : w.pellets > 1 ? 10 : 18,
         damage,
-        pierce: w.perk === 'armor-piercing',
+        pierce: w.perk === 'armor-piercing' || Boolean(w.piercing),
         poison: acidShot,
         ignite: w.perk === 'dragons-breath',
-        color: acidShot
-          ? '#7cf03d'
-          : overdrive
-            ? '#ff4d4d'
-            : w.perk === 'dragons-breath'
-              ? '#ff7a18'
-              : '#ffe066',
-        width: acidShot ? w.tracerWidth + 1 : w.tracerWidth,
+        cryo: cryoShot,
+        ignoreArmour: Boolean(w.piercing),
+        blast: w.blastRadius ?? 0,
+        blastFreeze: w.blastFreeze ?? 0,
+        color: cryoShot
+          ? '#7dd3fc'
+          : w.blastRadius
+            ? '#38bdf8'
+            : w.piercing
+              ? '#fb923c'
+              : acidShot
+                ? '#7cf03d'
+                : overdrive
+                  ? '#ff4d4d'
+                  : w.perk === 'dragons-breath'
+                    ? '#ff7a18'
+                    : '#ffe066',
+        width: acidShot || cryoShot ? w.tracerWidth + 1 : w.tracerWidth,
         hit: new Set<Enemy>(),
       })
     }
@@ -1590,6 +1760,10 @@ export class Game {
       pierce: false,
       poison: false,
       ignite: false,
+      cryo: false,
+      ignoreArmour: false,
+      blast: 0,
+      blastFreeze: 0,
       color: '#a78bfa',
       width: 2,
       hit: new Set<Enemy>(),
@@ -1599,14 +1773,19 @@ export class Game {
   private updateBullets(dt: number) {
     for (let i = this.bullets.length - 1; i >= 0; i--) {
       const b = this.bullets[i]
+      const px = b.x
+      const py = b.y
       b.x += b.vx * dt
       b.y += b.vy * dt
       b.life -= dt
       let dead = b.life <= 0 || circleHitsWall(this.map, b.x, b.y, 2)
       const boss = this.boss
-      if (!dead && boss && boss.hp > 0 && Math.hypot(boss.x - b.x, boss.y - b.y) < boss.r) {
+      // Fast rounds cover more ground per frame than an enemy is wide, so hits
+      // are measured against the whole step, not just where the bullet landed.
+      if (!dead && boss && boss.hp > 0 && segmentDistance(boss.x, boss.y, px, py, b.x, b.y) < boss.r) {
         const travelled = 1 - b.life / b.maxLife
         boss.hp -= b.damage * (1 - (1 - b.falloff) * travelled)
+        if (b.blast > 0) dead = true
         boss.hurt = 0.12
         if (boss.hp <= boss.maxHp / 2 && boss.phase === 1) {
           boss.phase = 2
@@ -1619,20 +1798,48 @@ export class Game {
         for (let j = this.enemies.length - 1; j >= 0; j--) {
           const e = this.enemies[j]
           if (b.hit.has(e)) continue
-          if (Math.hypot(e.x - b.x, e.y - b.y) >= e.r + 2) continue
+          if (segmentDistance(e.x, e.y, px, py, b.x, b.y) >= e.r + 2) continue
           b.hit.add(e)
           const travelled = 1 - b.life / b.maxLife
-          e.hp -= b.damage * (1 - (1 - b.falloff) * travelled) * this.mutationArmour
+          const armour = b.ignoreArmour ? 1 : this.mutationArmour
+          e.hp -= b.damage * (1 - (1 - b.falloff) * travelled) * armour
           if (b.poison) e.poison = POISON_DURATION
+          if (b.cryo) e.slow = CRYO_SLOW_TIME
           if (b.ignite && e.kind === 'bug' && Math.random() < IGNITE_CHANCE) e.burn = BURN_DURATION
           if (e.hp <= 0) this.killEnemy(j)
+          if (b.blast > 0) {
+            dead = true
+            break
+          }
           if (!b.pierce) {
             dead = true
             break
           }
         }
       }
-      if (dead) this.bullets.splice(i, 1)
+      if (dead) {
+        if (b.blast > 0) this.detonate(b)
+        this.bullets.splice(i, 1)
+      }
+    }
+  }
+
+  /** Cryo canister: damages the group it lands in and freezes it solid. */
+  private detonate(b: Bullet) {
+    this.blasts.push({ x: b.x, y: b.y, r: b.blast, life: BLAST_LIFE, maxLife: BLAST_LIFE })
+    playSfx('explosion')
+    for (let i = this.enemies.length - 1; i >= 0; i--) {
+      const e = this.enemies[i]
+      if (Math.hypot(e.x - b.x, e.y - b.y) > b.blast + e.r) continue
+      e.hp -= b.damage * this.mutationArmour
+      e.stun = Math.max(e.stun, b.blastFreeze)
+      e.slow = CRYO_SLOW_TIME
+      if (e.hp <= 0) this.killEnemy(i)
+    }
+    const boss = this.boss
+    if (boss && boss.hp > 0 && Math.hypot(boss.x - b.x, boss.y - b.y) < b.blast + boss.r) {
+      boss.hp -= b.damage
+      boss.hurt = 0.12
     }
   }
 
@@ -1641,6 +1848,8 @@ export class Game {
     this.enemies.splice(index, 1)
     this.kills += 1
     this.scrapEarned += z.kind === 'bug' ? SCRAP_PER_BUG : SCRAP_PER_KILL
+    // Cold-weather mutations are the only source of chips outside missions.
+    if (this.mission?.chapter === 2) this.chipsEarned += CHIPS_PER_KILL
     if (this.mutation?.id === 'toxic-blood') {
       this.acid.push({ x: z.x, y: z.y, r: ACID_RADIUS, life: ACID_LIFE, maxLife: ACID_LIFE })
     }
@@ -1951,18 +2160,14 @@ export class Game {
     return { x: x * 0.6, y: y * 0.6 }
   }
 
-  /** Enemies prefer whichever survivor or player is closest. */
-  private targetFor(z: Enemy): {
-    x: number
-    y: number
-    survivor: Survivor | null
-    player: Player | null
-  } {
-    let best: { x: number; y: number; survivor: Survivor | null; player: Player | null } = {
+  /** Enemies prefer whichever survivor, player or generator is closest. */
+  private targetFor(z: Enemy): EnemyTarget {
+    let best: EnemyTarget = {
       x: z.x,
       y: z.y,
       survivor: null,
       player: null,
+      generator: null,
     }
     let bestD = Infinity
     for (const p of this.alivePlayers) {
@@ -1971,7 +2176,7 @@ export class Game {
       const d = Math.hypot(p.x - z.x, p.y - z.y)
       if (d < bestD) {
         bestD = d
-        best = { x: p.x, y: p.y, survivor: null, player: p }
+        best = { x: p.x, y: p.y, survivor: null, player: p, generator: null }
       }
     }
     for (const s of this.survivors) {
@@ -1979,8 +2184,13 @@ export class Game {
       const d = Math.hypot(s.x - z.x, s.y - z.y)
       if (d < bestD * SURVIVOR_AGGRO_BIAS) {
         bestD = d
-        best = { x: s.x, y: s.y, survivor: s, player: null }
+        best = { x: s.x, y: s.y, survivor: s, player: null, generator: null }
       }
+    }
+    const gen = this.generator
+    // The horde is drawn to the generator's heat far more than to people.
+    if (gen && gen.hp > 0 && Math.hypot(gen.x - z.x, gen.y - z.y) < bestD * GENERATOR_AGGRO_BIAS) {
+      best = { x: gen.x, y: gen.y, survivor: null, player: null, generator: gen }
     }
     return best
   }
@@ -1991,6 +2201,7 @@ export class Game {
     if (this.chaseField && this.chaseTimer > 0) return
     const goals: { x: number; y: number }[] = this.alivePlayers.filter((p) => !this.isCloaked(p))
     for (const s of this.survivors) if (!s.safe && s.hp > 0) goals.push(s)
+    if (this.generator && this.generator.hp > 0) goals.push(this.generator)
     this.chaseField = goals.length ? goalField(this.map, ENEMY_CLEARANCE, goals) : null
     this.chaseTimer = CHASE_FIELD_INTERVAL
   }
@@ -2012,7 +2223,11 @@ export class Game {
         this.killEnemy(i)
         continue
       }
-      z.speed = (z.burn > 0 ? z.baseSpeed * BURN_SLOW : z.baseSpeed) * this.mutationSpeed
+      if (z.slow > 0) z.slow -= dt
+      z.speed =
+        (z.burn > 0 ? z.baseSpeed * BURN_SLOW : z.baseSpeed) *
+        this.mutationSpeed *
+        (z.slow > 0 ? CRYO_SLOW : 1)
 
       // A stunned enemy is frozen solid: no chasing, no attacking.
       if (z.stun > 0) {
@@ -2021,7 +2236,7 @@ export class Game {
       }
 
       const target = this.targetFor(z)
-      if (!target.survivor && !target.player) continue
+      if (!target.survivor && !target.player && !target.generator) continue
       const dx = target.x - z.x
       const dy = target.y - z.y
       const d = Math.hypot(dx, dy) || 1
@@ -2079,10 +2294,15 @@ export class Game {
       }
       const victim = target.survivor
       const hunted = target.player
-      const reach = z.r + (victim ? victim.r : hunted ? hunted.r : 0)
+      const machine = target.generator
+      const reach = z.r + (victim ? victim.r : hunted ? hunted.r : machine ? machine.r : 0)
       if (d < reach && z.attackCooldown === 0) {
-        if (victim) {
-          victim.hp -= z.kind === 'bug' ? SURVIVOR_BUG_DAMAGE : SURVIVOR_ZOMBIE_DAMAGE
+        if (machine) {
+          machine.hp -= (z.kind === 'bug' ? GENERATOR_BUG_DAMAGE : GENERATOR_ZOMBIE_DAMAGE) * this.damageScale
+          machine.hurt = 0.2
+          z.attackCooldown = z.kind === 'bug' ? 1.2 : 0.8
+        } else if (victim) {
+          victim.hp -= (z.kind === 'bug' ? SURVIVOR_BUG_DAMAGE : SURVIVOR_ZOMBIE_DAMAGE) * this.damageScale
           victim.hurtCooldown = 0.25
           z.attackCooldown = z.kind === 'bug' ? 1.5 : 0.9
           if (z.kind === 'bug') z.retreat = 0.9
@@ -2093,7 +2313,7 @@ export class Game {
           hunted.hurtCooldown = 0.25
           hunted.safeTimer = 0
         } else if (hunted) {
-          hunted.hp -= 8
+          hunted.hp -= 8 * this.damageScale
           z.attackCooldown = 0.7
           hunted.hurtCooldown = 0.25
           hunted.safeTimer = 0
@@ -2133,20 +2353,37 @@ export class Game {
     if (!mission) return
     const protect = mission.type === 'protect'
     const boss = mission.type === 'boss'
+    const hold = mission.type === 'hold'
+    const generator = mission.type === 'generator'
+    // Hold the Line ramps from a trickle to a wall of bodies by the last second.
+    const holdProgress = hold && mission.holdTime ? 1 - this.holdTimer / mission.holdTime : 0
+    const ramp = 1 + holdProgress * (HOLD_RAMP - 1)
     const maxAlive = protect
       ? 4 + mission.survivors * 2
       : boss
         ? 6
-        : Math.min(14, Math.max(4, Math.ceil(mission.target / 3)))
+        : hold
+          ? Math.round(6 * ramp)
+          : generator
+            ? 12
+            : Math.min(14, Math.max(4, Math.ceil(mission.target / 3)))
     if (this.enemies.length >= maxAlive) return
-    if (!protect && !boss) {
+    if (!protect && !boss && !hold) {
       const remaining = mission.target - this.kills
       if (this.spawned - this.kills >= remaining + 4) return
     }
 
     this.spawnTimer -= dt
     if (this.spawnTimer > 0) return
-    this.spawnTimer = protect ? 1.5 : boss ? 2.4 : 0.9
+    this.spawnTimer = protect
+      ? 1.5
+      : boss
+        ? 2.4
+        : hold
+          ? Math.max(0.35, 1.6 / ramp)
+          : generator
+            ? 0.8
+            : 0.9
 
     const spot = this.spawnPoint()
     if (!spot) return
@@ -2172,7 +2409,7 @@ export class Game {
       x: spot.x,
       y: spot.y,
       r: 11,
-      hp: 60 * RUNNER_HP_FRACTION,
+      hp: 60 * RUNNER_HP_FRACTION * this.hpScale,
       speed: 0,
       baseSpeed: RUNNER_SPEED * (95 + Math.random() * 30),
       attackCooldown: 0,
@@ -2185,6 +2422,7 @@ export class Game {
       driftAngle: Math.random() * Math.PI * 2,
       revealed: false,
       stun: 0,
+      slow: 0,
     }
   }
 
@@ -2195,7 +2433,7 @@ export class Game {
       x: spot.x,
       y: spot.y,
       r: 14,
-      hp: 70,
+      hp: 70 * this.hpScale,
       speed: 0,
       baseSpeed: 88 + Math.random() * 26,
       attackCooldown: 0,
@@ -2208,6 +2446,7 @@ export class Game {
       driftAngle: Math.random() * Math.PI * 2,
       revealed: false,
       stun: 0,
+      slow: 0,
     }
   }
 
@@ -2218,7 +2457,7 @@ export class Game {
       x: spot.x,
       y: spot.y,
       r: brute ? 20 : 14,
-      hp: brute ? 120 : 60,
+      hp: (brute ? 120 : 60) * this.hpScale,
       speed: 0,
       baseSpeed: brute ? 70 : 95 + Math.random() * 30,
       attackCooldown: 0,
@@ -2231,6 +2470,7 @@ export class Game {
       driftAngle: Math.random() * Math.PI * 2,
       revealed: false,
       stun: 0,
+      slow: 0,
     }
   }
 
@@ -2240,7 +2480,7 @@ export class Game {
       x: spot.x,
       y: spot.y,
       r: 10,
-      hp: 34,
+      hp: 34 * this.hpScale,
       speed: 0,
       baseSpeed: 1.5 * (95 + Math.random() * 30),
       attackCooldown: 0,
@@ -2253,6 +2493,7 @@ export class Game {
       driftAngle: Math.random() * Math.PI * 2,
       revealed: false,
       stun: 0,
+      slow: 0,
     }
   }
 
@@ -2348,6 +2589,8 @@ export class Game {
     for (const t of this.turrets) this.drawTurret(t)
 
     for (const pool of this.acid) this.drawAcid(pool)
+    if (this.generator) this.drawGenerator(this.generator)
+    for (const blast of this.blasts) this.drawBlast(blast)
 
     for (const e of this.enemies) {
       if (e.kind !== 'camo' || e.revealed) this.drawGroundShadow(e.x, e.y, e.r)
@@ -2442,6 +2685,30 @@ export class Game {
       for (let y = Math.floor(y0 / 42) * 42; y < y1; y += 42) {
         for (let x = Math.floor(x0 / 180) * 180 + ((y / 42) % 2 ? 90 : 0); x < x1; x += 180) {
           ctx.fillRect(x, y + 3, 176, 36)
+        }
+      }
+    } else if (m.floor === 'ice') {
+      // Cracked lab ice: pale plates with hairline fractures between them.
+      ctx.strokeStyle = 'rgba(186,230,253,0.16)'
+      ctx.lineWidth = 2
+      for (let y = Math.floor(y0 / 120) * 120; y < y1; y += 120) {
+        for (let x = Math.floor(x0 / 120) * 120; x < x1; x += 120) {
+          ctx.strokeRect(x, y, 118, 118)
+          ctx.beginPath()
+          ctx.moveTo(x + 18, y + 96)
+          ctx.lineTo(x + 56, y + 40)
+          ctx.lineTo(x + 104, y + 74)
+          ctx.stroke()
+        }
+      }
+    } else if (m.floor === 'snow') {
+      ctx.fillStyle = 'rgba(224,242,254,0.07)'
+      for (let y = Math.floor(y0 / 80) * 80; y < y1; y += 80) {
+        for (let x = Math.floor(x0 / 80) * 80 + ((y / 80) % 2 ? 40 : 0); x < x1; x += 80) {
+          const r = ((x * 13 + y * 7) % 11) + 8
+          ctx.beginPath()
+          ctx.ellipse(x + 30, y + 34, r, r * 0.5, 0, 0, Math.PI * 2)
+          ctx.fill()
         }
       }
     } else if (m.floor === 'organic') {
@@ -3238,6 +3505,51 @@ export class Game {
   }
 
   /** Toxic Blood residue: a bubbling green puddle that fades out. */
+  /** The generator: a humming steel block with its own health bar. */
+  private drawGenerator(g: Generator) {
+    const ctx = this.ctx
+    const w = g.r * 2
+    ctx.save()
+    this.drawGroundShadow(g.x, g.y, g.r)
+    ctx.translate(g.x, g.y)
+    ctx.fillStyle = g.hurt > 0 ? '#fca5a5' : '#4b5563'
+    ctx.fillRect(-g.r, -g.r * 0.75, w, g.r * 1.5)
+    ctx.strokeStyle = '#111827'
+    ctx.lineWidth = 4
+    ctx.strokeRect(-g.r, -g.r * 0.75, w, g.r * 1.5)
+    ctx.fillStyle = '#f59e0b'
+    ctx.fillRect(-g.r * 0.6, -g.r * 0.4, g.r * 0.5, g.r * 0.5)
+    ctx.fillStyle = '#38bdf8'
+    ctx.fillRect(g.r * 0.1, -g.r * 0.4, g.r * 0.7, g.r * 0.8)
+    ctx.fillStyle = '#1f2937'
+    ctx.fillRect(-g.r * 0.3, g.r * 0.4, g.r * 0.6, g.r * 0.35)
+
+    const pct = Math.max(0, g.hp / g.maxHp)
+    ctx.fillStyle = 'rgba(0,0,0,0.6)'
+    ctx.fillRect(-g.r, -g.r * 1.35, w, 10)
+    ctx.fillStyle = pct > 0.5 ? '#34d399' : pct > 0.25 ? '#fbbf24' : '#ef4444'
+    ctx.fillRect(-g.r, -g.r * 1.35, w * pct, 10)
+    ctx.restore()
+  }
+
+  /** Cryo detonation: a fading ring of frost. */
+  private drawBlast(b: Blast) {
+    const ctx = this.ctx
+    const t = 1 - b.life / b.maxLife
+    ctx.save()
+    ctx.globalAlpha = Math.max(0, 1 - t)
+    ctx.strokeStyle = '#7dd3fc'
+    ctx.lineWidth = 6
+    ctx.beginPath()
+    ctx.arc(b.x, b.y, b.r * (0.4 + t * 0.6), 0, Math.PI * 2)
+    ctx.stroke()
+    ctx.fillStyle = 'rgba(56,189,248,0.18)'
+    ctx.beginPath()
+    ctx.arc(b.x, b.y, b.r * (0.4 + t * 0.6), 0, Math.PI * 2)
+    ctx.fill()
+    ctx.restore()
+  }
+
   private drawAcid(pool: AcidPool) {
     const ctx = this.ctx
     const fade = Math.min(1, pool.life / pool.maxLife + 0.2)
@@ -3655,6 +3967,15 @@ export class Game {
     ctx.fillText(m.name, mx + 4, my + 14)
     ctx.restore()
   }
+}
+
+/** Shortest distance from a point to the segment a→b, for swept hit tests. */
+function segmentDistance(px: number, py: number, ax: number, ay: number, bx: number, by: number) {
+  const dx = bx - ax
+  const dy = by - ay
+  const len = dx * dx + dy * dy
+  const t = len === 0 ? 0 : clamp(((px - ax) * dx + (py - ay) * dy) / len, 0, 1)
+  return Math.hypot(px - (ax + dx * t), py - (ay + dy * t))
 }
 
 /** Signed shortest angle from `b` to `a`, in radians. */

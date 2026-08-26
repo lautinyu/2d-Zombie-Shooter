@@ -1,7 +1,37 @@
 import type { MapId } from './maps'
 import { mapById } from './maps'
 
-export type MissionType = 'hunt' | 'hive' | 'protect' | 'boss'
+export type MissionType = 'hunt' | 'hive' | 'protect' | 'boss' | 'hold' | 'generator'
+
+/** Chapter 1 is the outbreak; chapter 2 is the arctic Project Horizon arc. */
+export type ChapterId = 1 | 2
+
+export interface ChapterInfo {
+  id: ChapterId
+  title: string
+  blurb: string
+}
+
+export const CHAPTERS: ChapterInfo[] = [
+  {
+    id: 1,
+    title: 'Chapter 1: The Outbreak',
+    blurb: 'The city, the swarm and the hive that started it all.',
+  },
+  {
+    id: 2,
+    title: 'Chapter 2: Project Horizon',
+    blurb:
+      'The frozen corporate lab 200 miles north. Everything here is tougher, and it pays in Frozen Data Chips.',
+  },
+]
+
+/** Chapter 2 mutations are hardened by the cold. */
+export const CH2_HP_SCALE = 1.5
+export const CH2_DAMAGE_SCALE = 1.3
+
+/** Chapter 2 opens once the Hive Mother is dead. */
+export const CHAPTER_2_GATE = 'finale'
 export type PathId = 'quarantine' | 'swarm' | 'evac'
 export type BossKind = 'hive-mother' | 'runner-alpha' | 'camo-stalker' | 'brood-matron'
 
@@ -56,6 +86,12 @@ export interface Mission {
   rewardBase?: number
   /** The finale only opens once enough path bosses are dead. */
   requiresPathBosses?: boolean
+  /** Which chapter's mission board the entry belongs to. */
+  chapter: ChapterId
+  /** Seconds to survive on 'hold' missions. */
+  holdTime?: number
+  /** Generator hit points on 'generator' missions. */
+  generatorHp?: number
 }
 
 export const MISSIONS: Mission[] = [
@@ -71,6 +107,7 @@ export const MISSIONS: Mission[] = [
     path: null,
     unlocks: ['quarantine-1', 'swarm-1', 'evac-1'],
     payout: 1,
+    chapter: 1,
   },
 
   // Path 1 — The Quarantine Zone
@@ -86,6 +123,7 @@ export const MISSIONS: Mission[] = [
     path: 'quarantine',
     unlocks: ['quarantine-2'],
     payout: 1.4,
+    chapter: 1,
   },
   {
     id: 'quarantine-2',
@@ -99,6 +137,7 @@ export const MISSIONS: Mission[] = [
     path: 'quarantine',
     unlocks: ['quarantine-boss'],
     payout: 1.7,
+    chapter: 1,
   },
   {
     id: 'quarantine-boss',
@@ -114,6 +153,7 @@ export const MISSIONS: Mission[] = [
     payout: 2.4,
     rewardBase: 100,
     boss: 'runner-alpha',
+    chapter: 1,
   },
 
   // Path 2 — The Swarm Skies
@@ -129,6 +169,7 @@ export const MISSIONS: Mission[] = [
     path: 'swarm',
     unlocks: ['swarm-2'],
     payout: 1.4,
+    chapter: 1,
   },
   {
     id: 'swarm-2',
@@ -142,6 +183,7 @@ export const MISSIONS: Mission[] = [
     path: 'swarm',
     unlocks: ['swarm-boss'],
     payout: 1.7,
+    chapter: 1,
   },
   {
     id: 'swarm-boss',
@@ -157,6 +199,7 @@ export const MISSIONS: Mission[] = [
     payout: 2.4,
     rewardBase: 100,
     boss: 'brood-matron',
+    chapter: 1,
   },
 
   // Path 3 — The Evacuation Route
@@ -172,6 +215,7 @@ export const MISSIONS: Mission[] = [
     path: 'evac',
     unlocks: ['evac-2'],
     payout: 1.4,
+    chapter: 1,
   },
   {
     id: 'evac-2',
@@ -185,6 +229,7 @@ export const MISSIONS: Mission[] = [
     path: 'evac',
     unlocks: ['evac-boss'],
     payout: 1.7,
+    chapter: 1,
   },
   {
     id: 'evac-boss',
@@ -200,6 +245,7 @@ export const MISSIONS: Mission[] = [
     payout: 2.4,
     rewardBase: 100,
     boss: 'camo-stalker',
+    chapter: 1,
   },
 
   // Finale — opens once both branches are cleared
@@ -218,6 +264,72 @@ export const MISSIONS: Mission[] = [
     rewardBase: 140,
     requiresPathBosses: true,
     boss: 'hive-mother',
+    chapter: 1,
+  },
+
+  // Chapter 2 — Project Horizon, 200 miles north
+  {
+    id: 'ch2-1',
+    name: 'Glacier Approach',
+    map: 'glacier',
+    type: 'hunt',
+    target: 22,
+    survivors: 0,
+    description: 'The transport dies a mile short of the facility. Walk the rest through the ice.',
+    objective: 'Clear 22 cold-weather mutations on the approach.',
+    path: null,
+    unlocks: ['ch2-2'],
+    payout: 1,
+    rewardBase: 30,
+    chapter: 2,
+  },
+  {
+    id: 'ch2-2',
+    name: 'Hold the Line',
+    map: 'cryolab',
+    type: 'hold',
+    target: 0,
+    survivors: 0,
+    description: 'The cryo lab seals behind you and the vents start emptying into the room.',
+    objective: 'Survive 2 minutes in the sealed lab. The waves never stop.',
+    path: null,
+    unlocks: ['ch2-3'],
+    payout: 1.3,
+    rewardBase: 40,
+    holdTime: 120,
+    chapter: 2,
+  },
+  {
+    id: 'ch2-3',
+    name: 'Defend the Generator Camp',
+    map: 'camp',
+    type: 'generator',
+    target: 26,
+    survivors: 0,
+    description: 'The camp runs on one generator. Lose it and everyone here freezes.',
+    objective: 'Break the assault — 26 kills. If the generator falls, the camp dies with it.',
+    path: null,
+    unlocks: ['ch2-4'],
+    payout: 1.5,
+    rewardBase: 45,
+    generatorHp: 1200,
+    chapter: 2,
+  },
+  {
+    id: 'ch2-4',
+    name: 'Deep Freeze Lockdown',
+    map: 'cryolab',
+    type: 'hold',
+    target: 0,
+    survivors: 0,
+    description: 'Facility security locks the lab down with you inside it. Again. Worse.',
+    objective: 'Survive 2 minutes as the lockdown floods the chamber.',
+    path: null,
+    unlocks: [],
+    payout: 1.8,
+    rewardBase: 55,
+    holdTime: 120,
+    chapter: 2,
   },
 ]
 
@@ -247,7 +359,17 @@ export function bossesDefeated(completed: string[]): number {
  * A mission is playable once every mission that unlocks it is cleared. All
  * three paths stay open in parallel; the finale needs two path bosses dead.
  */
+export function chapterMissions(chapter: ChapterId): Mission[] {
+  return MISSIONS.filter((m) => m.chapter === chapter)
+}
+
+/** Chapter 2 travel opens the moment the Hive Mother is dead. */
+export function chapterTwoUnlocked(completed: string[]): boolean {
+  return completed.includes(CHAPTER_2_GATE)
+}
+
 export function missionUnlocked(m: Mission, completed: string[]): boolean {
+  if (m.chapter === 2 && !chapterTwoUnlocked(completed)) return false
   if (m.requiresPathBosses) return bossesDefeated(completed) >= BOSSES_REQUIRED
   const prereqs = MISSIONS.filter((other) => other.unlocks.includes(m.id))
   if (prereqs.length && !prereqs.some((p) => completed.includes(p.id))) return false

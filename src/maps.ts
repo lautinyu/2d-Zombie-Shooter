@@ -19,9 +19,12 @@ export type MapId =
   | 'highway'
   | 'deadend'
   | 'fogward'
+  | 'glacier'
+  | 'cryolab'
+  | 'camp'
 
 /** Ground texture painted under everything else. */
-export type FloorStyle = 'asphalt' | 'wood' | 'organic' | 'dirt'
+export type FloorStyle = 'asphalt' | 'wood' | 'organic' | 'dirt' | 'ice' | 'snow'
 
 export interface GameMap {
   id: MapId
@@ -335,6 +338,95 @@ const FOGWARD: GameMap = {
   ],
 }
 
+/** Chapter 2: the frozen approach to the Project Horizon facility. */
+const GLACIER: GameMap = {
+  id: 'glacier',
+  name: 'Glacier Approach',
+  width: 1900,
+  height: 1500,
+  color: '#33505f',
+  wallColor: '#9fc7dd',
+  wallEdge: '#4d7a94',
+  floor: 'snow',
+  accent: '#e0f2fe',
+  extraction: { x: 1740, y: 1340 },
+  walls: [
+    ...border(1900, 1500),
+    { x: 240, y: 220, w: 300, h: 200 },
+    { x: 980, y: 180, w: 340, h: 180 },
+    { x: 1520, y: 420, w: 240, h: 260 },
+    { x: 200, y: 780, w: 260, h: 240 },
+    { x: 720, y: 640, w: 320, h: 200 },
+    { x: 1180, y: 900, w: 300, h: 220 },
+    ...partitions([
+      // Ice ridges and frozen crates scattered along the approach.
+      { x: 620, y: 320, w: 120, h: 90 },
+      { x: 1420, y: 1100, w: 140, h: 90 },
+      { x: 520, y: 1140, w: 200, h: 80 },
+      { x: 900, y: 1240, w: 120, h: 90 },
+    ]),
+  ],
+}
+
+/** Chapter 2: a sealed cryo lab used for the Hold the Line siege. */
+const CRYOLAB: GameMap = {
+  id: 'cryolab',
+  name: 'Cryo Lab',
+  width: 1300,
+  height: 1100,
+  color: '#2b4655',
+  wallColor: '#8fb6cc',
+  wallEdge: '#3f5b6b',
+  floor: 'ice',
+  accent: '#bae6fd',
+  extraction: { x: 1160, y: 960 },
+  // One sealed chamber: pillars and cryo pods for cover, no way out.
+  walls: [
+    ...border(1300, 1100),
+    ...partitions([
+      { x: 300, y: 260, w: 110, h: 110 },
+      { x: 880, y: 260, w: 110, h: 110 },
+      { x: 300, y: 720, w: 110, h: 110 },
+      { x: 880, y: 720, w: 110, h: 110 },
+      { x: 590, y: 500, w: 120, h: 120 },
+      { x: 120, y: 520, w: 90, h: 70 },
+      { x: 1090, y: 520, w: 90, h: 70 },
+    ]),
+  ],
+}
+
+/** Chapter 2: an exposed camp built around a single power generator. */
+const CAMP: GameMap = {
+  id: 'camp',
+  name: 'Generator Camp',
+  width: 1700,
+  height: 1400,
+  color: '#35525f',
+  wallColor: '#7f9aa8',
+  wallEdge: '#3d5460',
+  floor: 'snow',
+  accent: '#d1f0ff',
+  extraction: { x: 1540, y: 1240 },
+  walls: [
+    ...border(1700, 1400),
+    { x: 220, y: 220, w: 240, h: 160 },
+    { x: 1240, y: 220, w: 240, h: 160 },
+    { x: 220, y: 1020, w: 240, h: 160 },
+    { x: 1240, y: 1020, w: 240, h: 160 },
+    ...partitions([
+      // Sandbag lines ringing the generator pad, with gaps to defend.
+      { x: 560, y: 420, w: 260, h: 36 },
+      { x: 900, y: 420, w: 240, h: 36 },
+      { x: 560, y: 944, w: 240, h: 36 },
+      { x: 880, y: 944, w: 260, h: 36 },
+      { x: 520, y: 520, w: 36, h: 200 },
+      { x: 520, y: 800, w: 36, h: 140 },
+      { x: 1144, y: 520, w: 36, h: 200 },
+      { x: 1144, y: 800, w: 36, h: 140 },
+    ]),
+  ],
+}
+
 export const MAPS: GameMap[] = [
   STREETS,
   WAREHOUSE,
@@ -345,6 +437,9 @@ export const MAPS: GameMap[] = [
   HIGHWAY,
   DEADEND,
   FOGWARD,
+  GLACIER,
+  CRYOLAB,
+  CAMP,
 ]
 
 export function mapById(id: MapId): GameMap {

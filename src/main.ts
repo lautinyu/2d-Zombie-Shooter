@@ -3,19 +3,22 @@ import { Game } from './game'
 import type { GameState, Hud } from './game'
 import {
   BOSSES_REQUIRED,
+  CHAPTERS,
   MISSIONS,
   PATHS,
   bossesDefeated,
+  chapterMissions,
+  chapterTwoUnlocked,
   missionMapName,
   missionUnlocked,
   pathComplete,
   pathMissions,
 } from './missions'
-import type { Mission, PathInfo } from './missions'
+import type { ChapterId, Mission, PathInfo } from './missions'
 import { RadarChart } from './radar'
-import { weaponById, weaponsInSlot } from './weapons'
+import { chapterTwoWeapons, weaponById, weaponsInSlot } from './weapons'
 import type { Weapon, WeaponId, WeaponSlot } from './weapons'
-import { loadProfile, missionReward, saveProfile } from './profile'
+import { loadProfile, missionChipReward, missionReward, saveProfile } from './profile'
 import { CHARACTERS, characterById } from './characters'
 import type { CharacterId } from './characters'
 import { TEXTURE_PACKS } from './theme'
@@ -70,6 +73,21 @@ app.innerHTML = `
       <span id="current-zone">The Streets</span>
     </div>
 
+    <div id="hold-timer" class="absolute left-1/2 top-16 hidden -translate-x-1/2 rounded-xl bg-black/70 px-8 py-2 text-center ring-2 ring-cyan-400/60">
+      <div class="text-[11px] font-black uppercase tracking-[0.3em] text-cyan-300">Hold the Line</div>
+      <div id="hold-clock" class="font-mono text-5xl font-black text-white">2:00</div>
+    </div>
+
+    <div id="generator-bar" class="absolute left-1/2 top-16 hidden w-[min(560px,80vw)] -translate-x-1/2">
+      <div class="flex items-baseline justify-between text-xs font-black uppercase tracking-widest">
+        <span class="text-cyan-300">Generator</span>
+        <span id="generator-text" class="text-slate-300"></span>
+      </div>
+      <div class="mt-1 h-4 w-full overflow-hidden rounded-md bg-black/70 ring-2 ring-cyan-500/60">
+        <div id="generator-fill" class="h-full w-full bg-gradient-to-r from-cyan-400 to-sky-600"></div>
+      </div>
+    </div>
+
     <div id="boss-bar" class="absolute left-1/2 top-16 hidden w-[min(760px,80vw)] -translate-x-1/2">
       <div class="flex items-baseline justify-between text-xs font-black uppercase tracking-widest">
         <span id="boss-name" class="text-orange-300">The Hive Mother</span>
@@ -108,7 +126,9 @@ app.innerHTML = `
     <div class="w-full max-w-4xl">
       <h1 class="text-center text-5xl font-black tracking-tight text-emerald-400 drop-shadow">ZOMBIE SHOOTER</h1>
       <p class="mt-2 text-center text-sm text-slate-400">Top-down survival · pick a mission, clear the zone, get out alive.</p>
-      <div class="mt-4 text-center text-sm font-bold text-yellow-300">Scrap: <span id="menu-scrap">0</span></div>
+      <div class="mt-4 text-center text-sm font-bold text-yellow-300">Scrap: <span id="menu-scrap">0</span>
+        <span class="ml-3 text-cyan-300">Frozen Data Chips: <span id="menu-chips">0</span></span>
+      </div>
       <div class="mt-5 flex justify-center">
         <button id="start-btn" class="rounded-xl bg-emerald-500 px-10 py-3 text-lg font-black tracking-wide text-emerald-950 hover:bg-emerald-400">Start Game</button>
       </div>
@@ -161,11 +181,14 @@ app.innerHTML = `
     <div class="w-full max-w-5xl">
       <div class="flex items-baseline justify-between">
         <h2 id="arsenal-title" class="text-3xl font-black tracking-tight text-yellow-400">WEAPONS SHOP</h2>
-        <div class="text-sm font-bold text-yellow-300">Scrap: <span id="arsenal-scrap">0</span></div>
+        <div class="text-sm font-bold text-yellow-300">Scrap: <span id="arsenal-scrap">0</span>
+          <span class="ml-3 text-cyan-300">Chips: <span id="arsenal-chips">0</span></span>
+        </div>
       </div>
       <div class="mt-4 flex gap-2 text-xs">
         <button id="slot-primary" class="rounded-lg px-4 py-1.5 font-bold">Primary</button>
         <button id="slot-secondary" class="rounded-lg px-4 py-1.5 font-bold">Secondary / Melee</button>
+        <button id="slot-chips" class="rounded-lg px-4 py-1.5 font-bold">❄ Chapter 2 Tech</button>
       </div>
       <div class="mt-6 grid gap-6 md:grid-cols-[minmax(0,1fr)_320px]">
         <div id="weapon-list" class="space-y-2"></div>
@@ -237,6 +260,8 @@ const radar = new RadarChart(el<HTMLCanvasElement>('radar'), 280)
 const campaignEl = el('campaign')
 
 let currentMission: Mission = MISSIONS[0]
+/** Which chapter's mission board the menu is showing. */
+let chapter: ChapterId = 1
 
 function unlocked(m: Mission) {
   return missionUnlocked(m, profile.completed)
@@ -259,7 +284,15 @@ function missionCard(m: Mission): HTMLElement {
       ? `<span class="rounded-md bg-sky-500/15 px-2 py-0.5 text-[11px] font-semibold text-sky-300">Protect ${m.survivors}</span>`
       : m.type === 'boss'
         ? '<span class="rounded-md bg-orange-500/20 px-2 py-0.5 text-[11px] font-semibold text-orange-300">Boss · 2 phases</span>'
-        : `<span class="rounded-md bg-red-500/15 px-2 py-0.5 text-[11px] font-semibold text-red-300">${m.target} kills</span>`
+        : m.type === 'hold'
+          ? `<span class="rounded-md bg-cyan-500/15 px-2 py-0.5 text-[11px] font-semibold text-cyan-300">Survive ${Math.round((m.holdTime ?? 0) / 60)} min</span>`
+          : m.type === 'generator'
+            ? `<span class="rounded-md bg-cyan-500/15 px-2 py-0.5 text-[11px] font-semibold text-cyan-300">Defend generator · ${m.target} kills</span>`
+            : `<span class="rounded-md bg-red-500/15 px-2 py-0.5 text-[11px] font-semibold text-red-300">${m.target} kills</span>`
+  const chips =
+    m.chapter === 2
+      ? `<span class="rounded-md bg-cyan-500/15 px-2 py-0.5 text-[11px] font-semibold text-cyan-300">${missionChipReward(m)} chips</span>`
+      : ''
   card.innerHTML = `
     <div class="flex items-center justify-between">
       <span class="text-[11px] font-semibold uppercase tracking-wider text-emerald-400">${missionMapName(m)}</span>
@@ -270,6 +303,7 @@ function missionCard(m: Mission): HTMLElement {
     <div class="mt-3 flex items-center gap-2">
       ${badge}
       <span class="rounded-md bg-yellow-500/15 px-2 py-0.5 text-[11px] font-semibold text-yellow-300">${missionReward(m)} scrap</span>
+      ${chips}
     </div>
   `
   if (open) card.addEventListener('click', () => launch(m))
@@ -302,8 +336,61 @@ function branchColumn(path: PathInfo): HTMLElement {
   return col
 }
 
+/** Big stylised button that moves the mission board between chapters. */
+function chapterButton(to: ChapterId): HTMLElement {
+  const open = to === 1 || chapterTwoUnlocked(profile.completed)
+  const btn = document.createElement('button')
+  btn.disabled = !open
+  btn.className = `w-full rounded-2xl px-6 py-4 text-center text-lg font-black tracking-wide ring-2 transition ${
+    !open
+      ? 'cursor-not-allowed bg-black/40 text-slate-500 ring-white/10'
+      : to === 2
+        ? 'bg-cyan-500/15 text-cyan-200 ring-cyan-400/60 hover:bg-cyan-500/25'
+        : 'bg-emerald-500/15 text-emerald-200 ring-emerald-400/60 hover:bg-emerald-500/25'
+  }`
+  btn.textContent =
+    to === 2 ? '➡️ TRAVEL TO CHAPTER 2: PROJECT HORIZON' : '⬅️ RETURN TO CHAPTER 1: THE OUTBREAK'
+  if (!open) {
+    const note = document.createElement('div')
+    note.className = 'mt-1 text-[11px] font-semibold uppercase tracking-widest text-slate-500'
+    note.textContent = 'Locked — clear The Hive Mother first'
+    const wrap = document.createElement('div')
+    wrap.appendChild(btn)
+    wrap.appendChild(note)
+    return wrap
+  }
+  btn.addEventListener('click', () => {
+    chapter = to
+    renderCampaign()
+  })
+  return btn
+}
+
+/** Chapter 2's arctic board: a plain list of the frozen-lab missions. */
+function renderChapterTwo() {
+  const info = CHAPTERS[1]
+  const header = document.createElement('div')
+  header.className = 'rounded-2xl bg-cyan-500/5 p-4 ring-1 ring-cyan-400/30'
+  header.innerHTML = `
+    <h3 class="text-sm font-black uppercase tracking-wider text-cyan-200">${info.title}</h3>
+    <p class="mt-1 text-xs text-slate-400">${info.blurb}</p>
+    <div class="mt-2 text-xs font-semibold text-cyan-300">Frozen Data Chips: ${profile.chips} · enemies here have +50% health and hit 30% harder.</div>
+  `
+  campaignEl.appendChild(header)
+
+  const list = document.createElement('div')
+  list.className = 'grid gap-4 md:grid-cols-2'
+  for (const m of chapterMissions(2)) list.appendChild(missionCard(m))
+  campaignEl.appendChild(list)
+  campaignEl.appendChild(chapterButton(1))
+}
+
 function renderCampaign() {
   campaignEl.innerHTML = ''
+  if (chapter === 2) {
+    renderChapterTwo()
+    return
+  }
 
   const intro = document.createElement('div')
   intro.className = 'grid gap-4 sm:grid-cols-[minmax(0,1fr)_minmax(0,2fr)] items-start'
@@ -350,6 +437,8 @@ function renderCampaign() {
     wrap.appendChild(holder)
     campaignEl.appendChild(wrap)
   }
+
+  campaignEl.appendChild(chapterButton(2))
 }
 
 const introPacks = el('intro-packs')
@@ -581,7 +670,9 @@ el('characters-close').addEventListener('click', () => {
 
 type ArsenalMode = 'shop' | 'locker'
 let arsenalMode: ArsenalMode = 'shop'
-let arsenalSlot: WeaponSlot = 'primary'
+/** Shop/locker tabs: the two scrap slots plus the Chapter 2 chip tab. */
+type ArsenalTab = WeaponSlot | 'chips'
+let arsenalSlot: ArsenalTab = 'primary'
 let selectedWeapon: Weapon = weaponById(profile.primary)
 
 const weaponListEl = el('weapon-list')
@@ -596,6 +687,8 @@ function persist() {
   saveProfile(profile)
   el('menu-scrap').textContent = `${profile.scrap}`
   el('arsenal-scrap').textContent = `${profile.scrap}`
+  el('menu-chips').textContent = `${profile.chips}`
+  el('arsenal-chips').textContent = `${profile.chips}`
   el('menu-equipped').textContent = `${weaponById(profile.primary).name} + ${
     weaponById(profile.secondary).name
   }`
@@ -623,8 +716,17 @@ function openArsenal(mode: ArsenalMode) {
 
 /** The shop lists every weapon in the tab; the locker only what you own. */
 function slotWeapons(): Weapon[] {
-  const inSlot = weaponsInSlot(arsenalSlot)
+  const inSlot = arsenalSlot === 'chips' ? chapterTwoWeapons() : weaponsInSlot(arsenalSlot)
   return arsenalMode === 'shop' ? inSlot : inSlot.filter((w) => owns(w.id))
+}
+
+/** Price label for a weapon in whichever currency it is sold in. */
+function priceLabel(w: Weapon): string {
+  return w.currency === 'chips' ? `${w.price} chips` : `${w.price} scrap`
+}
+
+function balanceFor(w: Weapon): number {
+  return w.currency === 'chips' ? profile.chips : profile.scrap
 }
 
 function equippedIn(w: Weapon) {
@@ -632,11 +734,14 @@ function equippedIn(w: Weapon) {
 }
 
 function renderSlotTabs() {
-  for (const slot of ['primary', 'secondary'] as WeaponSlot[]) {
+  for (const slot of ['primary', 'secondary', 'chips'] as ArsenalTab[]) {
     const btn = el(`slot-${slot}`)
+    const active = arsenalSlot === slot
     btn.className = `rounded-lg px-4 py-1.5 font-bold ${
-      arsenalSlot === slot
-        ? 'bg-emerald-500 text-emerald-950'
+      active
+        ? slot === 'chips'
+          ? 'bg-cyan-400 text-cyan-950'
+          : 'bg-emerald-500 text-emerald-950'
         : 'bg-white/10 text-slate-300 hover:bg-white/20'
     }`
   }
@@ -658,7 +763,7 @@ function renderArsenal() {
       ? '<span class="text-xs font-bold text-emerald-300">EQUIPPED</span>'
       : owned
         ? '<span class="text-xs font-bold text-sky-300">OWNED</span>'
-        : `<span class="text-xs font-bold text-yellow-300">${w.price} scrap</span>`
+        : `<span class="text-xs font-bold ${w.currency === 'chips' ? 'text-cyan-300' : 'text-yellow-300'}">${priceLabel(w)}</span>`
     row.innerHTML = `
       <span class="flex items-center gap-3">
         <span class="inline-block h-3 w-3 rounded-full" style="background:${w.color}"></span>
@@ -700,13 +805,17 @@ function renderDetail() {
     detailAction.className =
       'mt-4 w-full rounded-lg bg-emerald-500 px-4 py-3 text-sm font-bold text-emerald-950 hover:bg-emerald-400'
   } else {
-    detailAction.textContent = `Buy — ${w.price} scrap`
+    detailAction.textContent = `Buy — ${priceLabel(w)}`
     detailAction.disabled = false
-    const affordable = profile.scrap >= w.price
+    const affordable = balanceFor(w) >= w.price
     detailAction.className = `mt-4 w-full rounded-lg px-4 py-3 text-sm font-bold ${
-      affordable
-        ? 'bg-yellow-400 text-yellow-950 hover:bg-yellow-300'
-        : 'bg-yellow-500/20 text-yellow-200/70'
+      w.currency === 'chips'
+        ? affordable
+          ? 'bg-cyan-400 text-cyan-950 hover:bg-cyan-300'
+          : 'bg-cyan-500/20 text-cyan-200/70'
+        : affordable
+          ? 'bg-yellow-400 text-yellow-950 hover:bg-yellow-300'
+          : 'bg-yellow-500/20 text-yellow-200/70'
     }`
   }
 }
@@ -715,19 +824,21 @@ detailAction.addEventListener('click', () => {
   const w = selectedWeapon
   if (owns(w.id)) {
     profile[w.slot] = w.id
-  } else if (profile.scrap >= w.price) {
-    profile.scrap -= w.price
+  } else if (balanceFor(w) >= w.price) {
+    if (w.currency === 'chips') profile.chips -= w.price
+    else profile.scrap -= w.price
     profile.owned.push(w.id)
     profile[w.slot] = w.id
   } else {
-    detailNote.textContent = `Need ${w.price - profile.scrap} more scrap.`
+    const short = w.price - balanceFor(w)
+    detailNote.textContent = `Need ${short} more ${w.currency === 'chips' ? 'data chips' : 'scrap'}.`
     return
   }
   persist()
   renderArsenal()
 })
 
-for (const slot of ['primary', 'secondary'] as WeaponSlot[]) {
+for (const slot of ['primary', 'secondary', 'chips'] as ArsenalTab[]) {
   el(`slot-${slot}`).addEventListener('click', () => {
     arsenalSlot = slot
     const available = slotWeapons()
@@ -778,11 +889,17 @@ game.onStateChange = (state: GameState) => {
     const bonus = state === 'won' ? missionReward(currentMission) : 0
     const total = game.scrapEarned + bonus
     profile.scrap += total
+    // Data chips only ever come out of the arctic chapter.
+    const chipBonus =
+      state === 'won' && currentMission.chapter === 2 ? missionChipReward(currentMission) : 0
+    const chipTotal = currentMission.chapter === 2 ? game.chipsEarned + chipBonus : 0
+    profile.chips += chipTotal
     persist()
+    const chipText = chipTotal ? ` · +${chipTotal} frozen data chips` : ''
     const rewardText =
       state === 'won'
-        ? `+${total} scrap earned (${game.scrapEarned} from kills, ${bonus} mission bonus)`
-        : `+${total} scrap salvaged from kills`
+        ? `+${total} scrap earned (${game.scrapEarned} from kills, ${bonus} mission bonus)${chipText}`
+        : `+${total} scrap salvaged from kills${chipText}`
     el(state === 'won' ? 'win-reward' : 'lose-reward').textContent = rewardText
   }
   if (state === 'won' && finaleOutro) {
@@ -795,7 +912,11 @@ game.onStateChange = (state: GameState) => {
   if (state === 'won') {
     const where = missionMapName(currentMission)
     el('win-sub').textContent =
-      currentMission.type === 'boss'
+      currentMission.type === 'hold'
+        ? `${currentMission.name} complete — you held ${where} for the full ${Math.round((currentMission.holdTime ?? 0) / 60)} minutes.`
+      : currentMission.type === 'generator'
+        ? `${currentMission.name} complete — the generator is still running in ${where}.`
+      : currentMission.type === 'boss'
         ? `${currentMission.name} complete — the Mutated Alpha Bug is dead. The hive falls silent.`
         : currentMission.type === 'protect'
         ? `${currentMission.name} complete — all ${currentMission.survivors} survivors extracted from ${where}.`
@@ -806,13 +927,16 @@ game.onStateChange = (state: GameState) => {
   if (state === 'lost') {
     const infected = game.deathCause === 'infection'
     const lostSurvivor = game.deathCause === 'survivor'
+    const lostGenerator = game.deathCause === 'generator'
     const title = el('lose-title')
     const tagline = el('lose-tagline')
     title.textContent = infected
       ? 'INFECTION OVERWHELM!'
       : lostSurvivor
         ? 'SURVIVOR LOST'
-        : 'GAME OVER'
+        : lostGenerator
+          ? 'GENERATOR DESTROYED'
+          : 'GAME OVER'
     title.className = `text-6xl font-black ${infected ? 'animate-pulse text-orange-400' : 'text-red-500'}`
     tagline.classList.toggle('hidden', !infected)
     tagline.className = `mt-4 text-2xl font-bold text-orange-300 ${infected ? 'animate-pulse' : 'hidden'}`
@@ -825,7 +949,9 @@ game.onStateChange = (state: GameState) => {
       ? `The venom took hold in ${where} after 5 stings.`
       : lostSurvivor
         ? `A survivor died in ${where}. The escort is over.`
-        : `You fell in ${where} with ${game.kills} zombies cleared.`
+        : lostGenerator
+          ? `The generator fell in ${where}. The camp freezes over.`
+          : `You fell in ${where} with ${game.kills} zombies cleared.`
   }
 }
 
@@ -850,6 +976,11 @@ const mutationFill = el('mutation-fill')
 const hudWeapon = el('hud-weapon')
 const hudPerk = el('hud-perk')
 const hudScrap = el('hud-scrap')
+const holdTimerBox = el('hold-timer')
+const holdClock = el('hold-clock')
+const generatorBar = el('generator-bar')
+const generatorText = el('generator-text')
+const generatorFill = el('generator-fill')
 
 function playerPanel(): HTMLElement {
   const panel = document.createElement('div')
@@ -984,6 +1115,29 @@ game.onHud = (h: Hud) => {
     mutationBar.classList.toggle('animate-pulse', h.mutation.alert)
   }
 
+  holdTimerBox.classList.toggle('hidden', !h.hold)
+  if (h.hold) {
+    const left = Math.ceil(h.hold.time)
+    holdClock.textContent = `${Math.floor(left / 60)}:${`${left % 60}`.padStart(2, '0')}`
+    holdClock.className = `font-mono text-5xl font-black ${
+      left <= 15 ? 'animate-pulse text-red-400' : 'text-white'
+    }`
+  }
+
+  generatorBar.classList.toggle('hidden', !h.generator)
+  if (h.generator) {
+    const pct = (h.generator.hp / h.generator.maxHp) * 100
+    generatorText.textContent = `${h.generator.hp}/${h.generator.maxHp}`
+    generatorFill.style.width = `${pct}%`
+    generatorFill.className = `h-full ${
+      pct > 50
+        ? 'bg-gradient-to-r from-cyan-400 to-sky-600'
+        : pct > 25
+          ? 'bg-gradient-to-r from-amber-400 to-orange-500'
+          : 'bg-gradient-to-r from-red-500 to-rose-700 animate-pulse'
+    }`
+  }
+
   bossBar.classList.toggle('hidden', !h.boss)
   if (h.boss) {
     const pct = (h.boss.hp / h.boss.maxHp) * 100
@@ -995,7 +1149,11 @@ game.onHud = (h: Hud) => {
     }`
   }
 
-  if (h.isProtect) {
+  if (h.hold) {
+    const done = h.hold.total - h.hold.time
+    killText.textContent = `Hold: ${Math.ceil(h.hold.time)}s left`
+    missionBar.style.width = `${h.hold.total ? (done / h.hold.total) * 100 : 0}%`
+  } else if (h.isProtect) {
     const total = h.survivors.length
     killText.textContent = `Extracted: ${h.extracted}/${total}`
     missionBar.style.width = `${total ? (h.extracted / total) * 100 : 0}%`
@@ -1037,7 +1195,7 @@ game.onHud = (h: Hud) => {
 
   hudWeapon.textContent = h.weaponName
   hudPerk.textContent = h.perkName ? `Talent: ${h.perkName}` : 'No talent'
-  hudScrap.textContent = `+${h.scrap} scrap`
+  hudScrap.textContent = h.chips ? `+${h.scrap} scrap · +${h.chips} chips` : `+${h.scrap} scrap`
 }
 
 el('start-btn').addEventListener('click', startGameFlow)

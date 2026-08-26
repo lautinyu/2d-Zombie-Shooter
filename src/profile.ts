@@ -9,6 +9,8 @@ const STORAGE_KEY = 'zombie-shooter-profile-v1'
 
 export interface Profile {
   scrap: number
+  /** Chapter 2 currency, earned only in the arctic missions. */
+  chips: number
   owned: WeaponId[]
   /** Heavy firearm carried in the primary slot. */
   primary: WeaponId
@@ -27,6 +29,7 @@ export interface Profile {
 
 const DEFAULT_PROFILE: Profile = {
   scrap: 0,
+  chips: 0,
   owned: [...STARTER_WEAPONS],
   primary: 'old-rifle',
   secondary: 'm9-sidearm',
@@ -77,6 +80,7 @@ export function loadProfile(): Profile {
     }
     return {
       scrap: typeof record.scrap === 'number' && record.scrap >= 0 ? Math.floor(record.scrap) : 0,
+      chips: typeof record.chips === 'number' && record.chips >= 0 ? Math.floor(record.chips) : 0,
       owned,
       primary: pick('primary', record.primary),
       secondary: pick('secondary', record.secondary),
@@ -102,13 +106,28 @@ export function saveProfile(profile: Profile) {
 // Economy is deliberately tight: premium guns take several successful runs.
 export const SCRAP_PER_KILL = 2
 export const SCRAP_PER_BUG = 4
+/** Arctic kills drop a chip each; chapter 1 kills never do. */
+export const CHIPS_PER_KILL = 1
 
-export function missionReward(mission: {
+interface RewardMission {
   target: number
   survivors: number
   payout: number
   rewardBase?: number
-}): number {
-  const base = (mission.rewardBase ?? 20) + mission.target * 2 + mission.survivors * 25
+  holdTime?: number
+}
+
+export function missionReward(mission: RewardMission): number {
+  const base =
+    (mission.rewardBase ?? 20) +
+    mission.target * 2 +
+    mission.survivors * 25 +
+    Math.round((mission.holdTime ?? 0) / 2)
   return Math.round(base * mission.payout)
+}
+
+/** Completion bonus in Frozen Data Chips for a chapter 2 mission. */
+export function missionChipReward(mission: RewardMission): number {
+  const base = (mission.rewardBase ?? 20) + mission.target + Math.round((mission.holdTime ?? 0) / 6)
+  return Math.round((base * mission.payout) / 5)
 }
