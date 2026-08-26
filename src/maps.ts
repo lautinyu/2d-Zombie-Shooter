@@ -22,6 +22,7 @@ export type MapId =
   | 'glacier'
   | 'cryolab'
   | 'camp'
+  | 'frozencore'
 
 /** Ground texture painted under everything else. */
 export type FloorStyle = 'asphalt' | 'wood' | 'organic' | 'dirt' | 'ice' | 'snow'
@@ -427,6 +428,36 @@ const CAMP: GameMap = {
   ],
 }
 
+/** Chapter 2: the frost core chamber where the Cryo-Stalker is contained. */
+const FROZEN_CORE: GameMap = {
+  id: 'frozencore',
+  name: 'The Frozen Core',
+  width: 1600,
+  height: 1300,
+  color: '#294455',
+  wallColor: '#a8cfe4',
+  wallEdge: '#456b83',
+  floor: 'ice',
+  accent: '#e0f7ff',
+  extraction: { x: 1440, y: 1160 },
+  // A round-ish arena ringed with shattered ice pods to break line of sight.
+  walls: [
+    ...border(1600, 1300),
+    ...partitions([
+      { x: 300, y: 240, w: 90, h: 150 },
+      { x: 520, y: 170, w: 90, h: 150 },
+      { x: 1000, y: 170, w: 90, h: 150 },
+      { x: 1220, y: 240, w: 90, h: 150 },
+      { x: 180, y: 560, w: 150, h: 90 },
+      { x: 1280, y: 560, w: 150, h: 90 },
+      { x: 300, y: 930, w: 90, h: 150 },
+      { x: 520, y: 1000, w: 90, h: 150 },
+      { x: 1000, y: 1000, w: 90, h: 150 },
+      { x: 1220, y: 930, w: 90, h: 150 },
+    ]),
+  ],
+}
+
 export const MAPS: GameMap[] = [
   STREETS,
   WAREHOUSE,
@@ -440,6 +471,7 @@ export const MAPS: GameMap[] = [
   GLACIER,
   CRYOLAB,
   CAMP,
+  FROZEN_CORE,
 ]
 
 export function mapById(id: MapId): GameMap {

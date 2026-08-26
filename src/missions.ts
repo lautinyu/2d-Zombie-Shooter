@@ -33,7 +33,12 @@ export const CH2_DAMAGE_SCALE = 1.3
 /** Chapter 2 opens once the Hive Mother is dead. */
 export const CHAPTER_2_GATE = 'finale'
 export type PathId = 'quarantine' | 'swarm' | 'evac'
-export type BossKind = 'hive-mother' | 'runner-alpha' | 'camo-stalker' | 'brood-matron'
+export type BossKind =
+  | 'hive-mother'
+  | 'runner-alpha'
+  | 'camo-stalker'
+  | 'brood-matron'
+  | 'cryo-stalker'
 
 /** Path bosses; clearing two of them opens the Hive Mother finale. */
 export const PATH_BOSS_IDS = ['quarantine-boss', 'swarm-boss', 'evac-boss']
@@ -309,10 +314,27 @@ export const MISSIONS: Mission[] = [
     description: 'The camp runs on one generator. Lose it and everyone here freezes.',
     objective: 'Break the assault — 26 kills. If the generator falls, the camp dies with it.',
     path: null,
-    unlocks: ['ch2-4'],
+    unlocks: ['ch2-boss'],
     payout: 1.5,
     rewardBase: 45,
     generatorHp: 1200,
+    chapter: 2,
+  },
+  {
+    id: 'ch2-boss',
+    name: 'The Cryo-Stalker Infusion',
+    map: 'frozencore',
+    type: 'boss',
+    target: 1,
+    survivors: 0,
+    description:
+      'The frost core holds something the researchers never managed to keep frozen.',
+    objective: 'Kill the Cryo-Stalker before it adapts any further.',
+    path: null,
+    unlocks: ['ch2-4'],
+    payout: 2,
+    rewardBase: 70,
+    boss: 'cryo-stalker',
     chapter: 2,
   },
   {

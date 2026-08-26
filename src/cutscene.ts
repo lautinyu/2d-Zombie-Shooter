@@ -167,6 +167,40 @@ function bossDialogue(id: CharacterId, boss: BossKind): Line[] {
       },
     ]
   }
+  if (boss === 'cryo-stalker') {
+    return [
+      {
+        speaker: hero,
+        text: "Clear! Secure the room... Wait, there's a light on inside that panic bunker. Move up!",
+        side: 'left',
+      },
+      {
+        speaker: 'Hidden Researcher 1',
+        text: "Stop! Don't open the containment valves! We locked it in there for a reason!",
+        side: 'right',
+      },
+      {
+        speaker: hero,
+        text: "We're here from the southern safe zones. We destroyed the Hive Mother. Who are you people?",
+        side: 'left',
+      },
+      {
+        speaker: 'Hidden Researcher 2',
+        text: 'We are the remaining staff of Project Horizon... We tried to weaponize the plague bug venom. But it mutated. It absorbed our liquid nitrogen coolant lines!',
+        side: 'right',
+      },
+      {
+        speaker: 'Hidden Researcher 1',
+        text: "It's right behind you in the frost core! It doesn't just spread the virus anymore... it's adapting to the sub-zero temperatures! RUN!",
+        side: 'right',
+      },
+      {
+        speaker: hero,
+        text: 'Take cover and seal that glass. If it bleeds, we can kill it. Weapons hot!',
+        side: 'left',
+      },
+    ]
+  }
   if (boss === 'brood-matron') {
     return [
       {

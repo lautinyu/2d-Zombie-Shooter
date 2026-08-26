@@ -71,6 +71,8 @@ interface Player {
   recoil: number
   /** Seconds of trigger hold banked by a charge-up weapon. */
   charge: number
+  /** Seconds left of a Cryo-Stalker freeze slam's movement slow. */
+  chill: number
 }
 
 /** One carried weapon and the ammo left in it. */
@@ -206,6 +208,8 @@ interface Footprint {
 interface Boss {
   kind: BossKind
   name: string
+  /** Species label shown beside the name on the HUD bar. */
+  title: string
   x: number
   y: number
   r: number
@@ -251,6 +255,20 @@ interface Projectile {
   vy: number
   r: number
   life: number
+}
+
+/** A Cryo-Stalker icicle: pierces, so it tracks who it already hit. */
+interface Shard extends Projectile {
+  hit: Player[]
+}
+
+/** Expanding freeze shockwave from a Cryo-Stalker slam. */
+interface Shock {
+  x: number
+  y: number
+  r: number
+  maxR: number
+  hit: Player[]
 }
 
 interface Bullet {
@@ -340,6 +358,7 @@ export interface HudGenerator {
 
 export interface HudBoss {
   name: string
+  title: string
   hp: number
   maxHp: number
   phase: 1 | 2
@@ -513,6 +532,23 @@ const STALKER_VISIBLE_TIME = 6
 const STALKER_BACKSTAB_DAMAGE = 38
 const STALKER_FOOTPRINT_INTERVAL = 0.28
 const STALKER_FOOTPRINT_LIFE = 3
+/** Cryo-Stalker: freeze slams and piercing icicles inside the frost core. */
+const CRYO_STALKER_MAX_HP = 2000
+const CRYO_STALKER_RADIUS = 52
+const CRYO_STALKER_SPEED = 78
+const SLAM_INTERVAL = 7
+const SLAM_RANGE = 420
+const SLAM_GROWTH = 520
+const SLAM_DAMAGE = 14
+/** Freeze slam: 40% slower movement for three seconds. */
+const CHILL_SLOW = 0.6
+const CHILL_TIME = 3
+const SHARD_INTERVAL = 3.2
+const SHARD_COUNT = 3
+const SHARD_SPREAD = 0.22
+const SHARD_SPEED = 430
+const SHARD_LIFE = 2.4
+const SHARD_DAMAGE = 11
 /** Brood Matron: a lighter Hive Mother that guards the skyline. */
 const MATRON_MAX_HP = 1400
 const MATRON_RADIUS = 50
@@ -527,6 +563,7 @@ const BOSS_REVEAL_LINES: Record<BossKind, string> = {
   'brood-matron': "There she is... the roof belongs to her brood. Eyes up, let's take it down!",
   'runner-alpha': "There she is... that's the Alpha. Watch the walls and keep moving!",
   'camo-stalker': "There it is... barely. Watch the floor for prints, it's already circling!",
+  'cryo-stalker': "It's out of the pod — keep moving, that frost wave will pin you down!",
 }
 
 export class Game {
@@ -565,6 +602,8 @@ export class Game {
   private outro: 'off' | 'burst' | 'done' = 'off'
   private outroTimer = 0
   private venom: Projectile[] = []
+  private shards: Shard[] = []
+  private shocks: Shock[] = []
   private groanTimer = 2
   private barricades: Barricade[] = []
   /** Route field to the nearest player or survivor, rebuilt periodically. */
@@ -621,6 +660,9 @@ export class Game {
     this.bindInput()
     this.resize()
     window.addEventListener('resize', () => this.resize())
+    // Catches layout changes the window 'resize' event misses (zoom, chrome
+    // panels opening) so the canvas always covers the full viewport.
+    new ResizeObserver(() => this.resize()).observe(document.documentElement)
   }
 
   private makePlayer(
@@ -677,6 +719,7 @@ export class Game {
       barricadeCharges: character.barricades,
       recoil: 0,
       charge: 0,
+      chill: 0,
     }
   }
 
@@ -728,19 +771,21 @@ export class Game {
 
   private resize() {
     const dpr = window.devicePixelRatio || 1
-    this.canvas.width = Math.floor(window.innerWidth * dpr)
-    this.canvas.height = Math.floor(window.innerHeight * dpr)
-    this.canvas.style.width = `${window.innerWidth}px`
-    this.canvas.style.height = `${window.innerHeight}px`
+    const w = this.viewW
+    const h = this.viewH
+    this.canvas.width = Math.floor(w * dpr)
+    this.canvas.height = Math.floor(h * dpr)
+    this.canvas.style.width = `${w}px`
+    this.canvas.style.height = `${h}px`
     this.ctx.setTransform(dpr, 0, 0, dpr, 0, 0)
   }
 
   private get viewW() {
-    return window.innerWidth
+    return document.documentElement.clientWidth || window.innerWidth
   }
 
   private get viewH() {
-    return window.innerHeight
+    return document.documentElement.clientHeight || window.innerHeight
   }
 
   /**
@@ -773,6 +818,8 @@ export class Game {
     this.medkits = []
     this.barricades = []
     this.venom = []
+    this.shards = []
+    this.shocks = []
     this.gibs = []
     this.outro = 'off'
     this.outroTimer = 0
@@ -858,25 +905,44 @@ export class Game {
 
   /** Every boss nests in the middle of its arena, where the reveal fires. */
   private makeBoss(kind: BossKind): Boss {
-    const stats: Record<BossKind, { name: string; r: number; hp: number; speed: number }> = {
-      'hive-mother': { name: BOSS_NAME, r: BOSS_RADIUS, hp: BOSS_MAX_HP, speed: BOSS_SPEED },
+    const stats: Record<
+      BossKind,
+      { name: string; title: string; r: number; hp: number; speed: number }
+    > = {
+      'hive-mother': {
+        name: BOSS_NAME,
+        title: 'Mutated Alpha Bug',
+        r: BOSS_RADIUS,
+        hp: BOSS_MAX_HP,
+        speed: BOSS_SPEED,
+      },
       'brood-matron': {
         name: 'The Brood Matron',
+        title: 'Mutated Alpha Bug',
         r: MATRON_RADIUS,
         hp: MATRON_MAX_HP,
         speed: BOSS_SPEED * 1.15,
       },
       'runner-alpha': {
         name: 'The Runner Alpha',
+        title: 'Alpha Runner',
         r: ALPHA_RADIUS,
         hp: ALPHA_MAX_HP,
         speed: ALPHA_SPEED,
       },
       'camo-stalker': {
         name: 'The Camo Stalker',
+        title: 'Chameleon Abomination',
         r: STALKER_RADIUS,
         hp: STALKER_MAX_HP,
         speed: STALKER_SPEED,
+      },
+      'cryo-stalker': {
+        name: 'The Cryo-Stalker Infusion',
+        title: 'Cryogenic Mutation',
+        r: CRYO_STALKER_RADIUS,
+        hp: CRYO_STALKER_MAX_HP,
+        speed: CRYO_STALKER_SPEED,
       },
     }
     const s = stats[kind]
@@ -889,6 +955,7 @@ export class Game {
     return {
       kind,
       name: s.name,
+      title: s.title,
       x: spot.x,
       y: spot.y,
       r: s.r,
@@ -1014,6 +1081,7 @@ export class Game {
       boss: this.boss
         ? {
             name: this.boss.name,
+            title: this.boss.title,
             hp: Math.max(0, Math.round(this.boss.hp)),
             maxHp: this.boss.maxHp,
             phase: this.boss.phase,
@@ -1070,6 +1138,8 @@ export class Game {
     this.updateBullets(dt)
     this.updateBoss(dt)
     this.updateVenom(dt)
+    this.updateShards(dt)
+    this.updateShocks(dt)
     this.updateSurvivors(dt)
     this.updateTurrets(dt)
     this.updateEnemies(dt)
@@ -1268,6 +1338,8 @@ export class Game {
     this.enemies = []
     this.bullets = []
     this.venom = []
+    this.shards = []
+    this.shocks = []
     this.boss = null
     clearInput()
     playSfx('explosion')
@@ -1427,7 +1499,9 @@ export class Game {
       dy /= len
     }
     const boosted = p.character.id === 'army-retiree' && p.abilityActive > 0
-    const step = p.speed * (boosted ? OVERDRIVE_SPEED : 1) * dt
+    p.chill = Math.max(0, p.chill - dt)
+    const step =
+      p.speed * (boosted ? OVERDRIVE_SPEED : 1) * (p.chill > 0 ? CHILL_SLOW : 1) * dt
     p.vx = dx * step
     p.vy = dy * step
     this.moveCircle(p, p.vx, p.vy)
@@ -1882,6 +1956,10 @@ export class Game {
       this.updateCamoStalker(b, dt, prey)
       return
     }
+    if (b.kind === 'cryo-stalker') {
+      this.updateCryoStalker(b, dt, prey)
+      return
+    }
 
     if (b.dashing > 0) {
       b.dashing -= dt
@@ -2034,6 +2112,94 @@ export class Game {
       prey.hurtCooldown = 0.3
       prey.safeTimer = 0
       b.attackCooldown = 1
+    }
+  }
+
+  /**
+   * The Cryo-Stalker walks its prey down, slamming the floor for a freezing
+   * shockwave and spitting bursts of three piercing icicles between slams.
+   */
+  private updateCryoStalker(b: Boss, dt: number, prey: Player | null) {
+    if (prey) {
+      const speed = b.baseSpeed * (b.phase === 2 ? BOSS_ENRAGE_SPEED : 1)
+      this.moveCircle(b, Math.cos(b.angle) * speed * dt, Math.sin(b.angle) * speed * dt)
+    }
+
+    // broodTimer drives the slam, ringTimer the icicle burst.
+    b.broodTimer -= dt
+    if (b.broodTimer <= 0 && prey) {
+      b.broodTimer = SLAM_INTERVAL * (b.phase === 2 ? 0.65 : 1)
+      if (Math.hypot(prey.x - b.x, prey.y - b.y) < SLAM_RANGE) {
+        this.shocks.push({ x: b.x, y: b.y, r: b.r, maxR: SLAM_RANGE, hit: [] })
+        this.shake = Math.max(this.shake, 0.6)
+        playSfx('boss-dash')
+      }
+    }
+
+    b.ringTimer -= dt
+    if (b.ringTimer <= 0 && prey) {
+      b.ringTimer = SHARD_INTERVAL * (b.phase === 2 ? 0.7 : 1)
+      for (let i = 0; i < SHARD_COUNT; i++) {
+        const a = b.angle + (i - (SHARD_COUNT - 1) / 2) * SHARD_SPREAD
+        this.shards.push({
+          x: b.x + Math.cos(a) * (b.r + 8),
+          y: b.y + Math.sin(a) * (b.r + 8),
+          vx: Math.cos(a) * SHARD_SPEED,
+          vy: Math.sin(a) * SHARD_SPEED,
+          r: 6,
+          life: SHARD_LIFE,
+          hit: [],
+        })
+      }
+      playSfx('sting')
+    }
+
+    if (prey && b.attackCooldown === 0 && Math.hypot(prey.x - b.x, prey.y - b.y) < b.r + prey.r) {
+      prey.hp -= BOSS_CONTACT_DAMAGE
+      prey.hurtCooldown = 0.3
+      prey.safeTimer = 0
+      b.attackCooldown = 1
+    }
+  }
+
+  /** Icicles fly straight through players; each one hits a player only once. */
+  private updateShards(dt: number) {
+    for (let i = this.shards.length - 1; i >= 0; i--) {
+      const s = this.shards[i]
+      s.x += s.vx * dt
+      s.y += s.vy * dt
+      s.life -= dt
+      if (s.life <= 0 || circleHitsWall(this.map, s.x, s.y, s.r)) {
+        this.shards.splice(i, 1)
+        continue
+      }
+      for (const p of this.alivePlayers) {
+        if (s.hit.includes(p) || this.isCloaked(p)) continue
+        if (Math.hypot(p.x - s.x, p.y - s.y) > p.r + s.r) continue
+        s.hit.push(p)
+        p.hp -= SHARD_DAMAGE
+        p.hurtCooldown = 0.2
+        p.safeTimer = 0
+        playSfx('sting')
+      }
+    }
+  }
+
+  /** Freeze slams expand once, chilling each player they wash over. */
+  private updateShocks(dt: number) {
+    for (let i = this.shocks.length - 1; i >= 0; i--) {
+      const w = this.shocks[i]
+      w.r += SLAM_GROWTH * dt
+      for (const p of this.alivePlayers) {
+        if (w.hit.includes(p)) continue
+        if (Math.hypot(p.x - w.x, p.y - w.y) > w.r) continue
+        w.hit.push(p)
+        p.hp -= SLAM_DAMAGE
+        p.chill = CHILL_TIME
+        p.hurtCooldown = 0.2
+        p.safeTimer = 0
+      }
+      if (w.r >= w.maxR) this.shocks.splice(i, 1)
     }
   }
 
@@ -2251,18 +2417,11 @@ export class Game {
       const wob = Math.sin(z.wobble * 4) * 0.25
       z.retreat = Math.max(0, z.retreat - dt)
 
-      // Camouflage only hides players; survivors are spotted normally.
+      // The horde always knows roughly where its prey is; only a stealth
+      // character's low profile can keep it shambling instead of charging.
       const sight = z.vision * (target.player ? target.player.character.aggroMultiplier : 1)
-      z.aware = z.aware ? d < sight * VISION_HYSTERESIS : d < sight
-      if (!z.aware) {
-        z.driftAngle += (Math.random() - 0.5) * dt * 2
-        this.moveEnemy(
-          z,
-          Math.cos(z.driftAngle) * step * 0.3,
-          Math.sin(z.driftAngle) * step * 0.3
-        )
-        continue
-      }
+      const stealthy = target.player ? target.player.character.aggroMultiplier < 1 : false
+      z.aware = !stealthy || d < sight * (z.aware ? VISION_HYSTERESIS : 1)
 
       // Walk straight when the target is visible, otherwise follow the route
       // field so walls are rounded instead of pressed into.
@@ -2280,7 +2439,9 @@ export class Game {
       const uy = hy * dir
       const px = -uy * wob
       const py = ux * wob
-      this.moveEnemy(z, (ux + px) * step, (uy + py) * step)
+      // An unaware enemy still closes in, just at a shamble.
+      const pace = z.aware ? step : step * 0.45
+      this.moveEnemy(z, (ux + px) * pace, (uy + py) * pace)
 
       z.attackCooldown = Math.max(0, z.attackCooldown - dt)
 
@@ -2526,7 +2687,10 @@ export class Game {
     const spanY = Math.max(...ys) - Math.min(...ys) + COOP_CAMERA_MARGIN
 
     const fit = Math.min(this.viewW / spanX, this.viewH / spanY, 1)
-    const target = clamp(fit, MIN_ZOOM, 1)
+    // Never zoom out past the point where the arena stops covering the screen,
+    // otherwise a map narrower than the window leaves empty bands at the edges.
+    const cover = Math.max(this.viewW / m.width, this.viewH / m.height)
+    const target = clamp(fit, Math.max(MIN_ZOOM, cover), Math.max(1, cover))
     this.zoom += (target - this.zoom) * 0.08
     // Settle exactly on the target: an endlessly creeping zoom resamples every
     // texture line each frame, which reads as flickering while walking.
@@ -2602,6 +2766,8 @@ export class Game {
     }
 
     if (this.boss) this.drawBoss(this.boss)
+    for (const w of this.shocks) this.drawShock(w)
+    for (const s of this.shards) this.drawShard(s)
     for (const v of this.venom) this.drawVenom(v)
     for (const g of this.gibs) this.drawGib(g)
 
@@ -2901,6 +3067,43 @@ export class Game {
     ctx.restore()
   }
 
+  /** A flying icicle, drawn as a sharp sliver pointing along its flight. */
+  private drawShard(s: Shard) {
+    const ctx = this.ctx
+    this.drawGroundShadow(s.x, s.y, s.r * 0.7)
+    ctx.save()
+    ctx.translate(s.x, this.textures === 'enhanced' ? s.y - UNIT_LIFT : s.y)
+    ctx.rotate(Math.atan2(s.vy, s.vx))
+    ctx.fillStyle = '#e0f7ff'
+    ctx.beginPath()
+    ctx.moveTo(s.r * 2.2, 0)
+    ctx.lineTo(-s.r, -s.r * 0.8)
+    ctx.lineTo(-s.r, s.r * 0.8)
+    ctx.closePath()
+    ctx.fill()
+    ctx.strokeStyle = '#38bdf8'
+    ctx.lineWidth = 1.5
+    ctx.stroke()
+    ctx.restore()
+  }
+
+  /** The freezing ring thrown out by a slam. */
+  private drawShock(w: Shock) {
+    const ctx = this.ctx
+    const fade = Math.max(0, 1 - w.r / w.maxR)
+    ctx.save()
+    ctx.globalAlpha = 0.25 + fade * 0.5
+    ctx.strokeStyle = '#bae6fd'
+    ctx.lineWidth = 6 + fade * 8
+    ctx.beginPath()
+    ctx.arc(w.x, w.y, w.r, 0, Math.PI * 2)
+    ctx.stroke()
+    ctx.globalAlpha = fade * 0.18
+    ctx.fillStyle = '#7dd3fc'
+    ctx.fill()
+    ctx.restore()
+  }
+
   /** A chunk of the burst boss, fading as it flies. */
   private drawGib(g: Gib) {
     const ctx = this.ctx
@@ -2946,6 +3149,10 @@ export class Game {
     }
     if (b.kind === 'camo-stalker') {
       this.drawCamoStalker(b)
+      return
+    }
+    if (b.kind === 'cryo-stalker') {
+      this.drawCryoStalker(b)
       return
     }
     const ctx = this.ctx
@@ -3189,6 +3396,96 @@ export class Game {
       ctx.fillStyle = 'rgba(255,255,255,0.5)'
       ctx.beginPath()
       ctx.ellipse(0, 0, b.r, b.r * 0.78, 0, 0, Math.PI * 2)
+      ctx.fill()
+    }
+    ctx.restore()
+  }
+
+  /** Cryo-Stalker: a pale, ice-crusted hulk wreathed in frost. */
+  private drawCryoStalker(b: Boss) {
+    const ctx = this.ctx
+    const enhanced = this.textures === 'enhanced'
+    const lift = enhanced ? UNIT_LIFT * 2.6 : 0
+    const breathe = Math.sin(b.wobble * 3) * 0.06
+
+    ctx.save()
+    ctx.fillStyle = 'rgba(0,0,0,0.45)'
+    ctx.beginPath()
+    ctx.ellipse(b.x, b.y + b.r * 0.4, b.r, b.r * 0.45, 0, 0, Math.PI * 2)
+    ctx.fill()
+    ctx.restore()
+
+    ctx.save()
+    ctx.translate(b.x, b.y - lift)
+
+    // Cold aura, brighter once it enrages.
+    const aura = ctx.createRadialGradient(0, 0, b.r * 0.4, 0, 0, b.r * 2)
+    aura.addColorStop(0, b.phase === 2 ? 'rgba(56,189,248,0.5)' : 'rgba(125,211,252,0.32)')
+    aura.addColorStop(1, 'rgba(125,211,252,0)')
+    ctx.fillStyle = aura
+    ctx.beginPath()
+    ctx.arc(0, 0, b.r * 2, 0, Math.PI * 2)
+    ctx.fill()
+
+    ctx.rotate(b.angle)
+
+    // Heavy fists it slams the floor with.
+    ctx.fillStyle = '#7fb6d6'
+    for (const side of [-1, 1]) {
+      ctx.beginPath()
+      ctx.arc(b.r * 0.55, side * b.r * 0.78, b.r * 0.3, 0, Math.PI * 2)
+      ctx.fill()
+      ctx.strokeStyle = '#e0f7ff'
+      ctx.lineWidth = 3
+      ctx.stroke()
+    }
+
+    const body = b.phase === 2 ? '#9fd8f2' : '#8ec6e0'
+    if (enhanced) {
+      const size = b.r * (1.5 + breathe)
+      ctx.fillStyle = '#3f6d88'
+      ctx.fillRect(-size / 2, -size / 2, size, size)
+      ctx.fillStyle = body
+      ctx.fillRect(-size / 2, -size / 2, size, size * 0.76)
+      ctx.fillStyle = 'rgba(255,255,255,0.25)'
+      ctx.fillRect(-size / 2, -size / 2, size, size * 0.16)
+      ctx.strokeStyle = '#2c5165'
+      ctx.lineWidth = 3
+      ctx.strokeRect(-size / 2, -size / 2, size, size)
+    } else {
+      ctx.beginPath()
+      ctx.arc(0, 0, b.r * (1 + breathe), 0, Math.PI * 2)
+      ctx.fillStyle = body
+      ctx.fill()
+      ctx.strokeStyle = '#2c5165'
+      ctx.lineWidth = 4
+      ctx.stroke()
+    }
+
+    // Ice spikes bursting out of its back.
+    ctx.fillStyle = '#e0f7ff'
+    for (let i = -2; i <= 2; i++) {
+      const a = Math.PI + i * 0.35
+      ctx.beginPath()
+      ctx.moveTo(Math.cos(a) * b.r * 0.9, Math.sin(a) * b.r * 0.9)
+      ctx.lineTo(Math.cos(a - 0.12) * b.r * 1.55, Math.sin(a - 0.12) * b.r * 1.55)
+      ctx.lineTo(Math.cos(a + 0.12) * b.r * 0.95, Math.sin(a + 0.12) * b.r * 0.95)
+      ctx.closePath()
+      ctx.fill()
+    }
+
+    // Frost-burned eyes.
+    ctx.fillStyle = b.phase === 2 ? '#f0f9ff' : '#38bdf8'
+    for (const side of [-1, 1]) {
+      ctx.beginPath()
+      ctx.arc(b.r * 0.7, side * b.r * 0.26, b.r * 0.14, 0, Math.PI * 2)
+      ctx.fill()
+    }
+
+    if (b.hurt > 0) {
+      ctx.fillStyle = 'rgba(255,255,255,0.5)'
+      ctx.beginPath()
+      ctx.arc(0, 0, b.r, 0, Math.PI * 2)
       ctx.fill()
     }
     ctx.restore()

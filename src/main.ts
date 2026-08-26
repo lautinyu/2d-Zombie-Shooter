@@ -1141,7 +1141,7 @@ game.onHud = (h: Hud) => {
   bossBar.classList.toggle('hidden', !h.boss)
   if (h.boss) {
     const pct = (h.boss.hp / h.boss.maxHp) * 100
-    bossName.textContent = `${h.boss.name} · Mutated Alpha Bug`
+    bossName.textContent = `${h.boss.name} · ${h.boss.title}`
     bossPhase.textContent = `Phase ${h.boss.phase}${h.boss.phase === 2 ? ' · ENRAGED' : ''} — ${h.boss.hp}/${h.boss.maxHp}`
     bossFill.style.width = `${pct}%`
     bossFill.className = `h-full ${
