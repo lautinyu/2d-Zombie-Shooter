@@ -32,7 +32,7 @@ export interface Character {
   regenInterval: number
   /** Active ability fired with E (player 1) or M (player 2). */
   ability: Ability
-  /** Barricades deployable per mission with Q (player 1) or , (player 2). */
+  /** Barricades deployable per mission with F (player 1) or L (player 2). */
   barricades: number
 }
 
@@ -124,7 +124,7 @@ export const CHARACTERS: Character[] = [
     ability: {
       name: 'Defense Deployment',
       description:
-        'Drops an auto-turret on the spot — one active at a time, twice per mission. F (P2: ,) drops one barricade.',
+        'Drops an auto-turret on the spot — one active at a time, twice per mission. F (P2: L) drops one barricade.',
       cooldown: 4,
       duration: 0,
       charges: 2,

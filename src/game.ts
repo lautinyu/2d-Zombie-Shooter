@@ -37,8 +37,14 @@ interface Player {
   /** Primary slot first, secondary second; each keeps its own ammo. */
   slots: LoadoutSlot[]
   slotIndex: 0 | 1
-  /** 1 right after a melee swing, decaying to 0 — drives the swing arc. */
+  /** Progress 0→1 of the melee blade travelling through its arc. */
   swing: number
+  swinging: boolean
+  /** Swings alternate direction so repeated attacks read as slashes. */
+  swingDir: 1 | -1
+  /** Enemies the current sweep already cut, so the blade hits each once. */
+  swingHits: Enemy[]
+  swingHitBoss: boolean
   reloadTimer: number
   fireTimer: number
   shotsFired: number
@@ -343,8 +349,10 @@ const ACID_DPS = 16
 const MUTATION_SKIN_FADE = 2.5
 /** How fast the hand kickback settles after a shot. */
 const RECOIL_RECOVERY = 7
-/** How fast a melee swing arc fades after it lands. */
-const MELEE_SWING_RECOVERY = 4
+/** Seconds a melee blade takes to travel through its full arc. */
+const MELEE_SWING_TIME = 0.22
+/** Half-width of the blade's own hit wedge as it sweeps. */
+const MELEE_BLADE_HALF = 0.35
 /** Dead time after a weapon swap, so switching is not a free extra shot. */
 const WEAPON_SWITCH_TIME = 0.3
 
@@ -551,6 +559,10 @@ export class Game {
       slots,
       slotIndex: 0,
       swing: 0,
+      swinging: false,
+      swingDir: 1,
+      swingHits: [],
+      swingHitBoss: false,
       reloadTimer: 0,
       fireTimer: 0,
       shotsFired: 0,
@@ -861,7 +873,7 @@ export class Game {
           active: Math.max(0, p.abilityActive),
           charges: p.abilityCharges,
           barricades: p.barricadeCharges,
-          barricadeKey: p.id === 1 ? 'F' : ',',
+          barricadeKey: p.id === 1 ? 'F' : 'L',
         },
       })),
       mutation:
@@ -1198,7 +1210,7 @@ export class Game {
     }
     p.hurtCooldown = Math.max(0, p.hurtCooldown - dt)
     p.recoil = Math.max(0, p.recoil - dt * RECOIL_RECOVERY)
-    p.swing = Math.max(0, p.swing - dt * MELEE_SWING_RECOVERY)
+    this.updateSwing(p, dt)
 
     const c = p.character
     if (c.regenFraction > 0) {
@@ -1361,18 +1373,44 @@ export class Game {
    * enemy inside it, shoving them back and — for the baton — freezing them.
    */
   private swingMelee(p: Player, melee: MeleeProfile) {
-    const w = p.weapon
-    const overdrive = p.character.id === 'army-retiree' && p.abilityActive > 0
-    const damage = w.damage * (overdrive ? OVERDRIVE_DAMAGE : 1)
-    p.swing = 1
+    p.swinging = true
+    p.swing = 0
+    p.swingDir = p.swingDir === 1 ? -1 : 1
+    p.swingHits = []
+    p.swingHitBoss = false
     p.recoil = 1
+    playShot(p.weapon)
+    // Land the first slice on the frame the swing starts.
+    this.updateSwing(p, 0, melee)
+  }
+
+  /**
+   * Advances an in-flight melee swing: the blade travels across the weapon's
+   * arc and cuts whatever its wedge passes over, once per enemy per swing.
+   */
+  private updateSwing(p: Player, dt: number, profile?: MeleeProfile) {
+    if (!p.swinging) return
+    const melee = profile ?? p.weapon.melee
+    if (!melee) {
+      p.swinging = false
+      p.swing = 0
+      return
+    }
+    p.swing = Math.min(1, p.swing + dt / MELEE_SWING_TIME)
+    const blade = p.angle + p.swingDir * (p.swing - 0.5) * melee.arc
+    const overdrive = p.character.id === 'army-retiree' && p.abilityActive > 0
+    const damage = p.weapon.damage * (overdrive ? OVERDRIVE_DAMAGE : 1)
 
     for (let i = this.enemies.length - 1; i >= 0; i--) {
       const e = this.enemies[i]
+      if (p.swingHits.includes(e)) continue
       const d = Math.hypot(e.x - p.x, e.y - p.y)
       if (d > p.r + melee.reach + e.r) continue
       const to = Math.atan2(e.y - p.y, e.x - p.x)
-      if (Math.abs(angleDelta(to, p.angle)) > melee.arc / 2) continue
+      // Wide targets are forgiving: their radius widens the angular window.
+      const half = MELEE_BLADE_HALF + Math.atan2(e.r, Math.max(d, 1))
+      if (Math.abs(angleDelta(to, blade)) > half) continue
+      p.swingHits.push(e)
       e.hp -= damage * this.mutationArmour
       this.moveEnemy(e, Math.cos(to) * melee.knockback, Math.sin(to) * melee.knockback)
       if (melee.stunChance > 0 && Math.random() < melee.stunChance) e.stun = melee.stunTime
@@ -1380,10 +1418,12 @@ export class Game {
     }
 
     const boss = this.boss
-    if (boss && boss.hp > 0) {
+    if (boss && boss.hp > 0 && !p.swingHitBoss) {
       const d = Math.hypot(boss.x - p.x, boss.y - p.y)
       const to = Math.atan2(boss.y - p.y, boss.x - p.x)
-      if (d <= p.r + melee.reach + boss.r && Math.abs(angleDelta(to, p.angle)) <= melee.arc / 2) {
+      const half = MELEE_BLADE_HALF + Math.atan2(boss.r, Math.max(d, 1))
+      if (d <= p.r + melee.reach + boss.r && Math.abs(angleDelta(to, blade)) <= half) {
+        p.swingHitBoss = true
         boss.hp -= damage
         boss.hurt = 0.12
         if (boss.hp <= boss.maxHp / 2 && boss.phase === 1) {
@@ -1393,7 +1433,11 @@ export class Game {
         }
       }
     }
-    playShot(w)
+
+    if (p.swing >= 1) {
+      p.swinging = false
+      p.swingHits = []
+    }
   }
 
   /** True while Camouflage Blend hides this player from every enemy. */
@@ -3260,21 +3304,37 @@ export class Game {
     ctx.save()
     ctx.rotate(p.angle)
     if (melee) {
-      // The blade sweeps through its arc as the swing decays.
+      // The blade travels across the 90° arc; a fading trail marks the slash.
+      const swinging = p.swinging
+      const t = swinging ? p.swing : 0.5
+      const bladeA = p.swingDir * (t - 0.5) * melee.arc
+      const startA = p.swingDir * -0.5 * melee.arc
+      if (swinging) {
+        const from = Math.min(startA, bladeA)
+        const to = Math.max(startA, bladeA)
+        const grad = ctx.createRadialGradient(0, 0, p.r, 0, 0, p.r + melee.reach)
+        grad.addColorStop(0, 'rgba(255,255,255,0)')
+        grad.addColorStop(1, `rgba(255,255,255,${0.28 * (1 - t)})`)
+        ctx.beginPath()
+        ctx.moveTo(0, 0)
+        ctx.arc(0, 0, p.r + melee.reach, from, to)
+        ctx.closePath()
+        ctx.fillStyle = grad
+        ctx.fill()
+        ctx.beginPath()
+        ctx.arc(0, 0, p.r + melee.reach * 0.85, from, to)
+        ctx.strokeStyle = `rgba(226,232,240,${0.75 * (1 - t * 0.6)})`
+        ctx.lineWidth = 5
+        ctx.lineCap = 'round'
+        ctx.stroke()
+      }
       ctx.save()
-      ctx.rotate((p.swing - 0.5) * melee.arc)
+      ctx.rotate(bladeA)
       ctx.fillStyle = p.weapon.color
-      ctx.fillRect(p.r - 2, -2.5, melee.reach * 0.7, 5)
+      ctx.fillRect(p.r - 2, -2.5, melee.reach * 0.8, 5)
       ctx.fillStyle = '#1f2937'
       ctx.fillRect(p.r - 6, -4, 8, 8)
       ctx.restore()
-      if (p.swing > 0) {
-        ctx.beginPath()
-        ctx.arc(0, 0, p.r + melee.reach * 0.8, -melee.arc / 2, melee.arc / 2)
-        ctx.strokeStyle = `rgba(226,232,240,${0.5 * p.swing})`
-        ctx.lineWidth = 4
-        ctx.stroke()
-      }
     } else {
       ctx.fillStyle = '#e5e7eb'
       ctx.fillRect(p.r - 4 - kick, -4, 22, 8)
@@ -3304,10 +3364,14 @@ export class Game {
       { fwd: p.r + 12, side: -3 },
       { fwd: p.r + 1, side: 4 },
     ]
+    const melee = p.weapon.melee
+    // Hands ride along with a melee blade as it sweeps across its arc.
+    const swingOffset =
+      melee && p.swinging ? p.swingDir * (p.swing - 0.5) * melee.arc : 0
     ctx.save()
-    ctx.rotate(p.angle)
+    ctx.rotate(p.angle + swingOffset)
     for (const g of grips) {
-      const hx = g.fwd - kick
+      const hx = g.fwd - (melee ? 0 : kick)
       ctx.beginPath()
       ctx.moveTo(p.r * 0.4, g.side * 1.6)
       ctx.lineTo(hx, g.side)

@@ -230,7 +230,7 @@ export const WEAPONS: Weapon[] = [
     spread: 0,
     tracerWidth: 0,
     infiniteAmmo: true,
-    melee: { reach: 62, arc: Math.PI * 0.75, knockback: 26, stunChance: 0, stunTime: 0 },
+    melee: { reach: 62, arc: Math.PI / 2, knockback: 26, stunChance: 0, stunTime: 0 },
   },
   {
     id: 'stun-baton',
@@ -254,7 +254,7 @@ export const WEAPONS: Weapon[] = [
     spread: 0,
     tracerWidth: 0,
     infiniteAmmo: true,
-    melee: { reach: 54, arc: Math.PI * 0.6, knockback: 14, stunChance: 0.4, stunTime: 2 },
+    melee: { reach: 54, arc: Math.PI / 2, knockback: 14, stunChance: 0.4, stunTime: 2 },
   },
 ]
 

@@ -99,7 +99,7 @@ export function bindInput(canvas: HTMLCanvasElement, actions: InputActions) {
       case 'f':
         actions.p1Barricade()
         break
-      case ',':
+      case 'l':
         actions.p2Barricade()
         break
       case ' ':

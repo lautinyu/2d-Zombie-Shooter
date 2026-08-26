@@ -135,7 +135,7 @@ app.innerHTML = `
         <span class="font-mono text-slate-200">E</span> for your character's active ability (Engineer also drops a barricade with <span class="font-mono text-slate-200">F</span>).
         Each mission loads its own isolated map. Yellow crates restock ammo.
         <span class="font-semibold text-orange-300">Orange Plague Bugs</span> are fast and sting — five stings and you turn.
-        <div class="mt-2"><span class="font-semibold text-slate-200">Co-op:</span> Player 2 moves with the Arrow keys, auto-aims at the nearest enemy and fires on its own or with the <span class="font-mono text-slate-200">.</span> key. Their ability is <span class="font-mono text-slate-200">M</span> (barricade <span class="font-mono text-slate-200">,</span>), and <span class="font-mono text-slate-200">N</span> swaps their weapon.</div>
+        <div class="mt-2"><span class="font-semibold text-slate-200">Co-op:</span> Player 2 moves with the Arrow keys, auto-aims at the nearest enemy and fires on its own or with the <span class="font-mono text-slate-200">.</span> key. Their ability is <span class="font-mono text-slate-200">M</span> (barricade <span class="font-mono text-slate-200">L</span>), and <span class="font-mono text-slate-200">N</span> swaps their weapon.</div>
       </div>
     </div>
   </div>
@@ -947,7 +947,7 @@ function updatePlayerPanels(h: Hud) {
 
   hudControls.innerHTML =
     h.players.length > 1
-      ? 'P1: WASD · mouse aim · left click to shoot · R reload · Q swap weapon · E ability · F barricade<br>P2: Arrow keys · auto-aim · fires automatically or with . · N swap weapon · M ability · , barricade'
+      ? 'P1: WASD · mouse aim · left click to shoot · R reload · Q swap weapon · E ability · F barricade<br>P2: Arrow keys · auto-aim · fires automatically or with . · N swap weapon · M ability · L barricade'
       : 'WASD / Arrows to move · Mouse to aim · Left click to shoot · R to reload · Q to swap weapon · E ability · F barricade'
 }
 
