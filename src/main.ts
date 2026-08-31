@@ -8,7 +8,7 @@ import {
   PATHS,
   bossesDefeated,
   chapterMissions,
-  chapterTwoUnlocked,
+  chapterUnlocked,
   missionMapName,
   missionUnlocked,
   pathComplete,
@@ -16,9 +16,15 @@ import {
 } from './missions'
 import type { ChapterId, Mission, PathInfo } from './missions'
 import { RadarChart } from './radar'
-import { chapterTwoWeapons, weaponById, weaponsInSlot } from './weapons'
+import { chapterThreeWeapons, chapterTwoWeapons, weaponById, weaponsInSlot } from './weapons'
 import type { Weapon, WeaponId, WeaponSlot } from './weapons'
-import { loadProfile, missionChipReward, missionReward, saveProfile } from './profile'
+import {
+  loadProfile,
+  missionAmberReward,
+  missionChipReward,
+  missionReward,
+  saveProfile,
+} from './profile'
 import { CHARACTERS, characterById } from './characters'
 import type { CharacterId } from './characters'
 import { TEXTURE_PACKS } from './theme'
@@ -88,6 +94,16 @@ app.innerHTML = `
       </div>
     </div>
 
+    <div id="jungle-bar" class="absolute left-1/2 top-16 hidden w-[min(560px,80vw)] -translate-x-1/2">
+      <div class="flex items-baseline justify-between text-xs font-black uppercase tracking-widest">
+        <span id="jungle-label" class="text-lime-300">Objective</span>
+        <span id="jungle-text" class="text-slate-300"></span>
+      </div>
+      <div class="mt-1 h-4 w-full overflow-hidden rounded-md bg-black/70 ring-2 ring-lime-500/60">
+        <div id="jungle-fill" class="h-full w-0 bg-gradient-to-r from-lime-400 to-emerald-600"></div>
+      </div>
+    </div>
+
     <div id="boss-bar" class="absolute left-1/2 top-16 hidden w-[min(760px,80vw)] -translate-x-1/2">
       <div class="flex items-baseline justify-between text-xs font-black uppercase tracking-widest">
         <span id="boss-name" class="text-orange-300">The Hive Mother</span>
@@ -128,6 +144,7 @@ app.innerHTML = `
       <p class="mt-2 text-center text-sm text-slate-400">Top-down survival · pick a mission, clear the zone, get out alive.</p>
       <div class="mt-4 text-center text-sm font-bold text-yellow-300">Scrap: <span id="menu-scrap">0</span>
         <span class="ml-3 text-cyan-300">Frozen Data Chips: <span id="menu-chips">0</span></span>
+        <span class="ml-3 text-amber-400">Ancient Amber: <span id="menu-amber">0</span></span>
       </div>
       <div class="mt-5 flex justify-center">
         <button id="start-btn" class="rounded-xl bg-emerald-500 px-10 py-3 text-lg font-black tracking-wide text-emerald-950 hover:bg-emerald-400">Start Game</button>
@@ -183,12 +200,14 @@ app.innerHTML = `
         <h2 id="arsenal-title" class="text-3xl font-black tracking-tight text-yellow-400">WEAPONS SHOP</h2>
         <div class="text-sm font-bold text-yellow-300">Scrap: <span id="arsenal-scrap">0</span>
           <span class="ml-3 text-cyan-300">Chips: <span id="arsenal-chips">0</span></span>
+          <span class="ml-3 text-amber-400">Amber: <span id="arsenal-amber">0</span></span>
         </div>
       </div>
       <div class="mt-4 flex gap-2 text-xs">
         <button id="slot-primary" class="rounded-lg px-4 py-1.5 font-bold">Primary</button>
         <button id="slot-secondary" class="rounded-lg px-4 py-1.5 font-bold">Secondary / Melee</button>
         <button id="slot-chips" class="rounded-lg px-4 py-1.5 font-bold">❄ Chapter 2 Tech</button>
+        <button id="slot-amber" class="rounded-lg px-4 py-1.5 font-bold">🌿 Ancient Tech</button>
       </div>
       <div class="mt-6 grid gap-6 md:grid-cols-[minmax(0,1fr)_320px]">
         <div id="weapon-list" class="space-y-2"></div>
@@ -288,11 +307,19 @@ function missionCard(m: Mission): HTMLElement {
           ? `<span class="rounded-md bg-cyan-500/15 px-2 py-0.5 text-[11px] font-semibold text-cyan-300">Survive ${Math.round((m.holdTime ?? 0) / 60)} min</span>`
           : m.type === 'generator'
             ? `<span class="rounded-md bg-cyan-500/15 px-2 py-0.5 text-[11px] font-semibold text-cyan-300">Defend generator · ${m.target} kills</span>`
-            : `<span class="rounded-md bg-red-500/15 px-2 py-0.5 text-[11px] font-semibold text-red-300">${m.target} kills</span>`
+            : m.type === 'overgrowth'
+              ? `<span class="rounded-md bg-lime-500/15 px-2 py-0.5 text-[11px] font-semibold text-lime-300">Destroy ${m.hives ?? 0} Spore Hives</span>`
+              : m.type === 'supply'
+                ? `<span class="rounded-md bg-lime-500/15 px-2 py-0.5 text-[11px] font-semibold text-lime-300">Recover ${m.crates ?? 0} crates</span>`
+                : m.type === 'race'
+                  ? '<span class="rounded-md bg-lime-500/15 px-2 py-0.5 text-[11px] font-semibold text-lime-300">Reach extraction</span>'
+                  : `<span class="rounded-md bg-red-500/15 px-2 py-0.5 text-[11px] font-semibold text-red-300">${m.target} kills</span>`
   const chips =
     m.chapter === 2
       ? `<span class="rounded-md bg-cyan-500/15 px-2 py-0.5 text-[11px] font-semibold text-cyan-300">${missionChipReward(m)} chips</span>`
-      : ''
+      : m.chapter === 3
+        ? `<span class="rounded-md bg-amber-500/15 px-2 py-0.5 text-[11px] font-semibold text-amber-300">${missionAmberReward(m)} amber</span>`
+        : ''
   card.innerHTML = `
     <div class="flex items-center justify-between">
       <span class="text-[11px] font-semibold uppercase tracking-wider text-emerald-400">${missionMapName(m)}</span>
@@ -336,24 +363,34 @@ function branchColumn(path: PathInfo): HTMLElement {
   return col
 }
 
+const CHAPTER_LABEL: Record<ChapterId, string> = {
+  1: '⬅️ RETURN TO CHAPTER 1: THE OUTBREAK',
+  2: '➡️ TRAVEL TO CHAPTER 2: PROJECT HORIZON',
+  3: '➡️ VENTURE TO CHAPTER 3: THE PRIMEVAL CANOPY',
+}
+
+const CHAPTER_STYLE: Record<ChapterId, string> = {
+  1: 'bg-emerald-500/15 text-emerald-200 ring-emerald-400/60 hover:bg-emerald-500/25',
+  2: 'bg-cyan-500/15 text-cyan-200 ring-cyan-400/60 hover:bg-cyan-500/25',
+  3: 'bg-lime-500/15 text-lime-200 ring-lime-400/60 hover:bg-lime-500/25',
+}
+
 /** Big stylised button that moves the mission board between chapters. */
-function chapterButton(to: ChapterId): HTMLElement {
-  const open = to === 1 || chapterTwoUnlocked(profile.completed)
+function chapterButton(to: ChapterId, label = CHAPTER_LABEL[to]): HTMLElement {
+  const open = chapterUnlocked(to, profile.completed)
   const btn = document.createElement('button')
   btn.disabled = !open
   btn.className = `w-full rounded-2xl px-6 py-4 text-center text-lg font-black tracking-wide ring-2 transition ${
-    !open
-      ? 'cursor-not-allowed bg-black/40 text-slate-500 ring-white/10'
-      : to === 2
-        ? 'bg-cyan-500/15 text-cyan-200 ring-cyan-400/60 hover:bg-cyan-500/25'
-        : 'bg-emerald-500/15 text-emerald-200 ring-emerald-400/60 hover:bg-emerald-500/25'
+    !open ? 'cursor-not-allowed bg-black/40 text-slate-500 ring-white/10' : CHAPTER_STYLE[to]
   }`
-  btn.textContent =
-    to === 2 ? '➡️ TRAVEL TO CHAPTER 2: PROJECT HORIZON' : '⬅️ RETURN TO CHAPTER 1: THE OUTBREAK'
+  btn.textContent = label
   if (!open) {
     const note = document.createElement('div')
     note.className = 'mt-1 text-[11px] font-semibold uppercase tracking-widest text-slate-500'
-    note.textContent = 'Locked — clear The Hive Mother first'
+    note.textContent =
+      to === 3
+        ? 'Locked — clear The Cryo-Stalker Infusion first'
+        : 'Locked — clear The Hive Mother first'
     const wrap = document.createElement('div')
     wrap.appendChild(btn)
     wrap.appendChild(note)
@@ -382,11 +419,38 @@ function renderChapterTwo() {
   list.className = 'grid gap-4 md:grid-cols-2'
   for (const m of chapterMissions(2)) list.appendChild(missionCard(m))
   campaignEl.appendChild(list)
+  campaignEl.appendChild(chapterButton(3))
+  campaignEl.appendChild(chapterButton(1))
+}
+
+/** Chapter 3's jungle board: the three canopy operations, in order. */
+function renderChapterThree() {
+  const info = CHAPTERS[2]
+  const header = document.createElement('div')
+  header.className = 'rounded-2xl bg-lime-500/5 p-4 ring-1 ring-lime-400/30'
+  header.innerHTML = `
+    <h3 class="text-sm font-black uppercase tracking-wider text-lime-200">${info.title}</h3>
+    <p class="mt-1 text-xs text-slate-400">${info.blurb}</p>
+    <div class="mt-2 text-xs font-semibold text-amber-300">Ancient Amber: ${profile.amber} · moss-caked infected here carry double health. Hold SPACE to haul supply crates.</div>
+  `
+  campaignEl.appendChild(header)
+
+  const list = document.createElement('div')
+  list.className = 'grid gap-4 md:grid-cols-2'
+  for (const m of chapterMissions(3)) list.appendChild(missionCard(m))
+  campaignEl.appendChild(list)
+  campaignEl.appendChild(
+    chapterButton(2, '⬅️ RETURN TO CHAPTER 2: PROJECT HORIZON')
+  )
   campaignEl.appendChild(chapterButton(1))
 }
 
 function renderCampaign() {
   campaignEl.innerHTML = ''
+  if (chapter === 3) {
+    renderChapterThree()
+    return
+  }
   if (chapter === 2) {
     renderChapterTwo()
     return
@@ -670,8 +734,9 @@ el('characters-close').addEventListener('click', () => {
 
 type ArsenalMode = 'shop' | 'locker'
 let arsenalMode: ArsenalMode = 'shop'
-/** Shop/locker tabs: the two scrap slots plus the Chapter 2 chip tab. */
-type ArsenalTab = WeaponSlot | 'chips'
+/** Shop/locker tabs: the two scrap slots plus the premium chapter tabs. */
+type ArsenalTab = WeaponSlot | 'chips' | 'amber'
+const ARSENAL_TABS: ArsenalTab[] = ['primary', 'secondary', 'chips', 'amber']
 let arsenalSlot: ArsenalTab = 'primary'
 let selectedWeapon: Weapon = weaponById(profile.primary)
 
@@ -689,6 +754,8 @@ function persist() {
   el('arsenal-scrap').textContent = `${profile.scrap}`
   el('menu-chips').textContent = `${profile.chips}`
   el('arsenal-chips').textContent = `${profile.chips}`
+  el('menu-amber').textContent = `${profile.amber}`
+  el('arsenal-amber').textContent = `${profile.amber}`
   el('menu-equipped').textContent = `${weaponById(profile.primary).name} + ${
     weaponById(profile.secondary).name
   }`
@@ -716,17 +783,26 @@ function openArsenal(mode: ArsenalMode) {
 
 /** The shop lists every weapon in the tab; the locker only what you own. */
 function slotWeapons(): Weapon[] {
-  const inSlot = arsenalSlot === 'chips' ? chapterTwoWeapons() : weaponsInSlot(arsenalSlot)
+  const inSlot =
+    arsenalSlot === 'chips'
+      ? chapterTwoWeapons()
+      : arsenalSlot === 'amber'
+        ? chapterThreeWeapons()
+        : weaponsInSlot(arsenalSlot)
   return arsenalMode === 'shop' ? inSlot : inSlot.filter((w) => owns(w.id))
 }
 
 /** Price label for a weapon in whichever currency it is sold in. */
 function priceLabel(w: Weapon): string {
-  return w.currency === 'chips' ? `${w.price} chips` : `${w.price} scrap`
+  if (w.currency === 'chips') return `${w.price} chips`
+  if (w.currency === 'amber') return `${w.price} amber`
+  return `${w.price} scrap`
 }
 
 function balanceFor(w: Weapon): number {
-  return w.currency === 'chips' ? profile.chips : profile.scrap
+  if (w.currency === 'chips') return profile.chips
+  if (w.currency === 'amber') return profile.amber
+  return profile.scrap
 }
 
 function equippedIn(w: Weapon) {
@@ -734,14 +810,16 @@ function equippedIn(w: Weapon) {
 }
 
 function renderSlotTabs() {
-  for (const slot of ['primary', 'secondary', 'chips'] as ArsenalTab[]) {
+  for (const slot of ARSENAL_TABS) {
     const btn = el(`slot-${slot}`)
     const active = arsenalSlot === slot
     btn.className = `rounded-lg px-4 py-1.5 font-bold ${
       active
         ? slot === 'chips'
           ? 'bg-cyan-400 text-cyan-950'
-          : 'bg-emerald-500 text-emerald-950'
+          : slot === 'amber'
+            ? 'bg-amber-400 text-amber-950'
+            : 'bg-emerald-500 text-emerald-950'
         : 'bg-white/10 text-slate-300 hover:bg-white/20'
     }`
   }
@@ -763,7 +841,7 @@ function renderArsenal() {
       ? '<span class="text-xs font-bold text-emerald-300">EQUIPPED</span>'
       : owned
         ? '<span class="text-xs font-bold text-sky-300">OWNED</span>'
-        : `<span class="text-xs font-bold ${w.currency === 'chips' ? 'text-cyan-300' : 'text-yellow-300'}">${priceLabel(w)}</span>`
+        : `<span class="text-xs font-bold ${w.currency === 'chips' ? 'text-cyan-300' : w.currency === 'amber' ? 'text-amber-300' : 'text-yellow-300'}">${priceLabel(w)}</span>`
     row.innerHTML = `
       <span class="flex items-center gap-3">
         <span class="inline-block h-3 w-3 rounded-full" style="background:${w.color}"></span>
@@ -809,10 +887,14 @@ function renderDetail() {
     detailAction.disabled = false
     const affordable = balanceFor(w) >= w.price
     detailAction.className = `mt-4 w-full rounded-lg px-4 py-3 text-sm font-bold ${
-      w.currency === 'chips'
+      w.currency === 'amber'
         ? affordable
-          ? 'bg-cyan-400 text-cyan-950 hover:bg-cyan-300'
-          : 'bg-cyan-500/20 text-cyan-200/70'
+          ? 'bg-amber-400 text-amber-950 hover:bg-amber-300'
+          : 'bg-amber-500/20 text-amber-200/70'
+        : w.currency === 'chips'
+          ? affordable
+            ? 'bg-cyan-400 text-cyan-950 hover:bg-cyan-300'
+            : 'bg-cyan-500/20 text-cyan-200/70'
         : affordable
           ? 'bg-yellow-400 text-yellow-950 hover:bg-yellow-300'
           : 'bg-yellow-500/20 text-yellow-200/70'
@@ -826,19 +908,22 @@ detailAction.addEventListener('click', () => {
     profile[w.slot] = w.id
   } else if (balanceFor(w) >= w.price) {
     if (w.currency === 'chips') profile.chips -= w.price
+    else if (w.currency === 'amber') profile.amber -= w.price
     else profile.scrap -= w.price
     profile.owned.push(w.id)
     profile[w.slot] = w.id
   } else {
     const short = w.price - balanceFor(w)
-    detailNote.textContent = `Need ${short} more ${w.currency === 'chips' ? 'data chips' : 'scrap'}.`
+    const unit =
+      w.currency === 'chips' ? 'data chips' : w.currency === 'amber' ? 'ancient amber' : 'scrap'
+    detailNote.textContent = `Need ${short} more ${unit}.`
     return
   }
   persist()
   renderArsenal()
 })
 
-for (const slot of ['primary', 'secondary', 'chips'] as ArsenalTab[]) {
+for (const slot of ARSENAL_TABS) {
   el(`slot-${slot}`).addEventListener('click', () => {
     arsenalSlot = slot
     const available = slotWeapons()
@@ -894,8 +979,16 @@ game.onStateChange = (state: GameState) => {
       state === 'won' && currentMission.chapter === 2 ? missionChipReward(currentMission) : 0
     const chipTotal = currentMission.chapter === 2 ? game.chipsEarned + chipBonus : 0
     profile.chips += chipTotal
+    // Ancient Amber is paid out only for clearing a jungle stage.
+    const amberTotal =
+      state === 'won' && currentMission.chapter === 3 ? missionAmberReward(currentMission) : 0
+    profile.amber += amberTotal
     persist()
-    const chipText = chipTotal ? ` · +${chipTotal} frozen data chips` : ''
+    const chipText = chipTotal
+      ? ` · +${chipTotal} frozen data chips`
+      : amberTotal
+        ? ` · +${amberTotal} ancient amber`
+        : ''
     const rewardText =
       state === 'won'
         ? `+${total} scrap earned (${game.scrapEarned} from kills, ${bonus} mission bonus)${chipText}`
@@ -981,6 +1074,10 @@ const holdClock = el('hold-clock')
 const generatorBar = el('generator-bar')
 const generatorText = el('generator-text')
 const generatorFill = el('generator-fill')
+const jungleBar = el('jungle-bar')
+const jungleLabel = el('jungle-label')
+const jungleText = el('jungle-text')
+const jungleFill = el('jungle-fill')
 
 function playerPanel(): HTMLElement {
   const panel = document.createElement('div')
@@ -1138,6 +1235,13 @@ game.onHud = (h: Hud) => {
     }`
   }
 
+  jungleBar.classList.toggle('hidden', !h.jungle)
+  if (h.jungle) {
+    jungleLabel.textContent = h.jungle.label
+    jungleText.textContent = `${h.jungle.done}/${h.jungle.total}`
+    jungleFill.style.width = `${h.jungle.total ? (h.jungle.done / h.jungle.total) * 100 : 0}%`
+  }
+
   bossBar.classList.toggle('hidden', !h.boss)
   if (h.boss) {
     const pct = (h.boss.hp / h.boss.maxHp) * 100
@@ -1153,6 +1257,9 @@ game.onHud = (h: Hud) => {
     const done = h.hold.total - h.hold.time
     killText.textContent = `Hold: ${Math.ceil(h.hold.time)}s left`
     missionBar.style.width = `${h.hold.total ? (done / h.hold.total) * 100 : 0}%`
+  } else if (h.jungle) {
+    killText.textContent = `${h.jungle.label}: ${h.jungle.done}/${h.jungle.total}`
+    missionBar.style.width = `${h.jungle.total ? (h.jungle.done / h.jungle.total) * 100 : 0}%`
   } else if (h.isProtect) {
     const total = h.survivors.length
     killText.textContent = `Extracted: ${h.extracted}/${total}`

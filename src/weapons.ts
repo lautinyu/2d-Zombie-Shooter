@@ -10,6 +10,8 @@ export type WeaponId =
   | 'blizzard-rifle'
   | 'thermal-railgun'
   | 'cryo-launcher'
+  | 'venom-spitter'
+  | 'jungle-machete'
 
 /** Primaries are the heavy firearms; secondaries are sidearms and melee. */
 export type WeaponSlot = 'primary' | 'secondary'
@@ -35,9 +37,14 @@ export type PerkId =
   | 'cryo-rounds'
   | 'thermal-lance'
   | 'cryo-blast'
+  | 'venom-stacks'
+  | 'heavy-cleave'
 
-/** Chapter 1 gear is bought with scrap; arctic tech costs Frozen Data Chips. */
-export type Currency = 'scrap' | 'chips'
+/**
+ * Chapter 1 gear is bought with scrap, arctic tech with Frozen Data Chips and
+ * the jungle relics with Ancient Amber.
+ */
+export type Currency = 'scrap' | 'chips' | 'amber'
 
 /** Radar chart axes, scored 1-5. */
 export interface RadarStats {
@@ -87,7 +94,12 @@ export interface Weapon {
   /** Detonates on impact, freezing and damaging everything in the blast. */
   blastRadius?: number
   blastFreeze?: number
+  /** Acid needles melt armour and stack poison on the target. */
+  venom?: boolean
 }
+
+/** Poison applications a single target can carry from the Venom Spitter. */
+export const MAX_POISON_STACKS = 5
 
 /** How much a cryo hit slows a target, and for how long. */
 export const CRYO_SLOW = 0.5
@@ -367,6 +379,57 @@ export const WEAPONS: Weapon[] = [
     blastRadius: 130,
     blastFreeze: 2,
   },
+  {
+    id: 'venom-spitter',
+    name: 'Venom Spitter SMG',
+    slot: 'primary',
+    price: 26,
+    currency: 'amber',
+    color: '#a3e635',
+    perk: 'venom-stacks',
+    perkName: 'Acid Needles',
+    perkDescription:
+      'High-speed needles melt straight through armour and stack poison up to 5 times on one target.',
+    description: 'Primeval SMG grown around a venom gland: fast, corrosive, relentless.',
+    radar: { damage: 2, fireRate: 5, reloadSpeed: 4, ammoCapacity: 5, range: 3 },
+    damage: 20,
+    fireInterval: 0.065,
+    reloadTime: 1.1,
+    magSize: 40,
+    reserveStart: 240,
+    bulletSpeed: 1500,
+    bulletLife: 0.7,
+    pellets: 1,
+    spread: 0.07,
+    tracerWidth: 3,
+    venom: true,
+  },
+  {
+    id: 'jungle-machete',
+    name: 'Jungle Machete',
+    slot: 'secondary',
+    price: 18,
+    currency: 'amber',
+    color: '#65a30d',
+    perk: 'heavy-cleave',
+    perkName: 'Heavy Cleave',
+    perkDescription:
+      'An oversized blade: a 120° arc that hacks through vines and throws the horde back twice as far.',
+    description: 'Machete forged for the canopy. No ammo, huge arc, brutal knockback.',
+    radar: { damage: 4, fireRate: 3, reloadSpeed: 5, ammoCapacity: 5, range: 2 },
+    damage: 64,
+    fireInterval: 0.38,
+    reloadTime: 0,
+    magSize: 1,
+    reserveStart: 0,
+    bulletSpeed: 0,
+    bulletLife: 0,
+    pellets: 0,
+    spread: 0,
+    tracerWidth: 0,
+    infiniteAmmo: true,
+    melee: { reach: 74, arc: (120 * Math.PI) / 180, knockback: 52, stunChance: 0, stunTime: 0 },
+  },
 ]
 
 export const STARTER_WEAPONS: WeaponId[] = ['old-rifle', 'rusty-pistol', 'm9-sidearm']
@@ -374,6 +437,11 @@ export const STARTER_WEAPONS: WeaponId[] = ['old-rifle', 'rusty-pistol', 'm9-sid
 /** Arctic tech is sold on its own shop tab and paid for in Data Chips. */
 export function chapterTwoWeapons(): Weapon[] {
   return WEAPONS.filter((w) => w.currency === 'chips')
+}
+
+/** Jungle relics live on the Ancient Tech tab and cost Ancient Amber. */
+export function chapterThreeWeapons(): Weapon[] {
+  return WEAPONS.filter((w) => w.currency === 'amber')
 }
 
 export function weaponsInSlot(slot: WeaponSlot): Weapon[] {

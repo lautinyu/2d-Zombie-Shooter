@@ -11,6 +11,8 @@ export interface Profile {
   scrap: number
   /** Chapter 2 currency, earned only in the arctic missions. */
   chips: number
+  /** Chapter 3 currency, awarded only for clearing jungle stages. */
+  amber: number
   owned: WeaponId[]
   /** Heavy firearm carried in the primary slot. */
   primary: WeaponId
@@ -30,6 +32,7 @@ export interface Profile {
 const DEFAULT_PROFILE: Profile = {
   scrap: 0,
   chips: 0,
+  amber: 0,
   owned: [...STARTER_WEAPONS],
   primary: 'old-rifle',
   secondary: 'm9-sidearm',
@@ -81,6 +84,8 @@ export function loadProfile(): Profile {
     return {
       scrap: typeof record.scrap === 'number' && record.scrap >= 0 ? Math.floor(record.scrap) : 0,
       chips: typeof record.chips === 'number' && record.chips >= 0 ? Math.floor(record.chips) : 0,
+      // Saves written before chapter 3 simply have no amber yet.
+      amber: typeof record.amber === 'number' && record.amber >= 0 ? Math.floor(record.amber) : 0,
       owned,
       primary: pick('primary', record.primary),
       secondary: pick('secondary', record.secondary),
@@ -130,4 +135,10 @@ export function missionReward(mission: RewardMission): number {
 export function missionChipReward(mission: RewardMission): number {
   const base = (mission.rewardBase ?? 20) + mission.target + Math.round((mission.holdTime ?? 0) / 6)
   return Math.round((base * mission.payout) / 5)
+}
+
+/** Completion bonus in Ancient Amber for a chapter 3 mission. */
+export function missionAmberReward(mission: RewardMission): number {
+  const base = (mission.rewardBase ?? 20) + mission.target
+  return Math.round((base * mission.payout) / 6)
 }

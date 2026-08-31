@@ -1,10 +1,22 @@
 import type { MapId } from './maps'
 import { mapById } from './maps'
 
-export type MissionType = 'hunt' | 'hive' | 'protect' | 'boss' | 'hold' | 'generator'
+export type MissionType =
+  | 'hunt'
+  | 'hive'
+  | 'protect'
+  | 'boss'
+  | 'hold'
+  | 'generator'
+  | 'overgrowth'
+  | 'supply'
+  | 'race'
 
-/** Chapter 1 is the outbreak; chapter 2 is the arctic Project Horizon arc. */
-export type ChapterId = 1 | 2
+/**
+ * Chapter 1 is the outbreak, chapter 2 the arctic Project Horizon arc and
+ * chapter 3 the equatorial jungle the plague actually came from.
+ */
+export type ChapterId = 1 | 2 | 3
 
 export interface ChapterInfo {
   id: ChapterId
@@ -24,14 +36,26 @@ export const CHAPTERS: ChapterInfo[] = [
     blurb:
       'The frozen corporate lab 200 miles north. Everything here is tougher, and it pays in Frozen Data Chips.',
   },
+  {
+    id: 3,
+    title: 'Chapter 3: The Primeval Canopy',
+    blurb:
+      'The equatorial nesting grounds. Moss-caked infected carry double health, and the ruins pay in Ancient Amber.',
+  },
 ]
 
 /** Chapter 2 mutations are hardened by the cold. */
 export const CH2_HP_SCALE = 1.5
 export const CH2_DAMAGE_SCALE = 1.3
 
+/** Jungle infected are twice as tough as their chapter 1 kin. */
+export const CH3_HP_SCALE = 2
+export const CH3_DAMAGE_SCALE = 1.3
+
 /** Chapter 2 opens once the Hive Mother is dead. */
 export const CHAPTER_2_GATE = 'finale'
+/** Chapter 3 opens once the Cryo-Stalker closes chapter 2. */
+export const CHAPTER_3_GATE = 'ch2-boss'
 export type PathId = 'quarantine' | 'swarm' | 'evac'
 export type BossKind =
   | 'hive-mother'
@@ -97,6 +121,10 @@ export interface Mission {
   holdTime?: number
   /** Generator hit points on 'generator' missions. */
   generatorHp?: number
+  /** Spore Hives to destroy on 'overgrowth' missions. */
+  hives?: number
+  /** Supply crates to collect on 'supply' missions. */
+  crates?: number
 }
 
 export const MISSIONS: Mission[] = [
@@ -353,6 +381,58 @@ export const MISSIONS: Mission[] = [
     boss: 'cryo-stalker',
     chapter: 2,
   },
+
+  // Chapter 3 — The Primeval Canopy, at the equator
+  {
+    id: 'ch3-1',
+    name: 'Destroy the Hive Overgrowth',
+    map: 'canopy',
+    type: 'overgrowth',
+    target: 0,
+    survivors: 0,
+    description:
+      'Three egg sacks the size of trucks pulse in the hollow, hatching bugs faster than you can burn them.',
+    objective: 'Destroy all 3 Spore Hives while the brood keeps pouring out.',
+    path: null,
+    unlocks: ['ch3-2'],
+    payout: 1.4,
+    rewardBase: 60,
+    hives: 3,
+    chapter: 3,
+  },
+  {
+    id: 'ch3-2',
+    name: 'Supply Drop Retrieval Run',
+    map: 'thicket',
+    type: 'supply',
+    target: 0,
+    survivors: 0,
+    description:
+      'The drop scattered four crates across the thicket. The canopy is too thick to fly a second pass.',
+    objective: 'Find all 4 supply crates and hold the interact key to haul them out.',
+    path: null,
+    unlocks: ['ch3-3'],
+    payout: 1.6,
+    rewardBase: 70,
+    crates: 4,
+    chapter: 3,
+  },
+  {
+    id: 'ch3-3',
+    name: 'The Extraction Race',
+    map: 'valley',
+    type: 'race',
+    target: 0,
+    survivors: 0,
+    description:
+      'The hatch at the far end of the sunken valley is already open. Everything in the jungle knows it.',
+    objective: 'Fight down the valley and reach the extraction hatch. Mud slows you; nothing else does.',
+    path: null,
+    unlocks: [],
+    payout: 2,
+    rewardBase: 90,
+    chapter: 3,
+  },
 ]
 
 export function missionById(id: string): Mission {
@@ -390,8 +470,19 @@ export function chapterTwoUnlocked(completed: string[]): boolean {
   return completed.includes(CHAPTER_2_GATE)
 }
 
+/** Chapter 3 travel opens the moment the Cryo-Stalker is dead. */
+export function chapterThreeUnlocked(completed: string[]): boolean {
+  return completed.includes(CHAPTER_3_GATE)
+}
+
+export function chapterUnlocked(chapter: ChapterId, completed: string[]): boolean {
+  if (chapter === 2) return chapterTwoUnlocked(completed)
+  if (chapter === 3) return chapterThreeUnlocked(completed)
+  return true
+}
+
 export function missionUnlocked(m: Mission, completed: string[]): boolean {
-  if (m.chapter === 2 && !chapterTwoUnlocked(completed)) return false
+  if (!chapterUnlocked(m.chapter, completed)) return false
   if (m.requiresPathBosses) return bossesDefeated(completed) >= BOSSES_REQUIRED
   const prereqs = MISSIONS.filter((other) => other.unlocks.includes(m.id))
   if (prereqs.length && !prereqs.some((p) => completed.includes(p.id))) return false

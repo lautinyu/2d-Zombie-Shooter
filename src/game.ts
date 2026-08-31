@@ -3,14 +3,14 @@ import type { MeleeProfile, Weapon } from './weapons'
 import { weaponById } from './weapons'
 import type { Character } from './characters'
 import { characterById } from './characters'
-import { CH2_DAMAGE_SCALE, CH2_HP_SCALE } from './missions'
+import { CH2_DAMAGE_SCALE, CH2_HP_SCALE, CH3_DAMAGE_SCALE, CH3_HP_SCALE } from './missions'
 import { CHIPS_PER_KILL, SCRAP_PER_BUG, SCRAP_PER_KILL } from './profile'
-import { CRYO_SLOW, CRYO_SLOW_TIME } from './weapons'
+import { CRYO_SLOW, CRYO_SLOW_TIME, MAX_POISON_STACKS } from './weapons'
 import { playMusic, playSfx, playShot } from './audio'
 import type { TexturePack } from './theme'
 import { BUILDING_HEIGHT, MAX_BUILDING_LIFT, UNIT_LIFT } from './theme'
 import type { GameMap, Rect } from './maps'
-import { circleHitsWall, mapById } from './maps'
+import { circleHitsWall, inMud, mapById } from './maps'
 import { extractionField, flowDirection, goalField } from './nav'
 import type { FlowField } from './nav'
 import { drawCharacterSkin } from './skins'
@@ -96,6 +96,8 @@ interface Enemy {
   retreat: number
   baseSpeed: number
   poison: number
+  /** Venom Spitter applications riding on the poison timer, up to 5. */
+  poisonStacks: number
   burn: number
   vision: number
   aware: boolean
@@ -106,6 +108,29 @@ interface Enemy {
   stun: number
   /** Seconds left of a cryo bullet's movement slow. */
   slow: number
+}
+
+/** A rooted Spore Hive hatching bugs on 'overgrowth' missions. */
+interface Hive {
+  x: number
+  y: number
+  r: number
+  hp: number
+  maxHp: number
+  hurt: number
+  /** Drives the egg sack's breathing animation. */
+  pulse: number
+  spawnTimer: number
+}
+
+/** An air-dropped crate collected by standing on it on 'supply' missions. */
+interface Crate {
+  x: number
+  y: number
+  r: number
+  /** 0→1 while a player holds the interact key beside it. */
+  progress: number
+  collected: boolean
 }
 
 /** The power generator defended on 'generator' missions. */
@@ -283,6 +308,8 @@ interface Bullet {
   ignite: boolean
   /** Slows whatever it hits by CRYO_SLOW for CRYO_SLOW_TIME seconds. */
   cryo: boolean
+  /** Acid needles that stack poison instead of refreshing a single dose. */
+  venom: boolean
   /** Thermal beams cut straight through hardened shells. */
   ignoreArmour: boolean
   /** Detonation radius on impact; 0 for ordinary rounds. */
@@ -356,6 +383,13 @@ export interface HudGenerator {
   maxHp: number
 }
 
+/** Chapter 3 objective counters: hives felled, crates hauled, ground covered. */
+export interface HudObjective {
+  label: string
+  done: number
+  total: number
+}
+
 export interface HudBoss {
   name: string
   title: string
@@ -378,6 +412,8 @@ export interface Hud {
   boss: HudBoss | null
   hold: HudHold | null
   generator: HudGenerator | null
+  /** Chapter 3 progress counter, or null outside the jungle missions. */
+  jungle: HudObjective | null
   /** Frozen Data Chips banked so far this mission. */
   chips: number
   mutation: HudMutation | null
@@ -456,6 +492,17 @@ const GENERATOR_BUG_DAMAGE = 18
 const BLAST_LIFE = 0.35
 /** Hold the Line: how much the wave pressure ramps by the final second. */
 const HOLD_RAMP = 2.2
+/** Spore Hives: fat, stationary egg sacks that keep hatching until burst. */
+const HIVE_RADIUS = 46
+const HIVE_HP = 900
+const HIVE_BROOD_INTERVAL = 3.4
+/** Bugs a single hive keeps alive at once. */
+const HIVE_BROOD_MAX = 6
+const CRATE_RADIUS = 22
+/** Seconds of held interaction needed to haul a supply crate out. */
+const CRATE_COLLECT_TIME = 1.2
+/** Mud pits: everything wading through one moves at 55% pace. */
+const MUD_SLOW = 0.55
 
 const MUTATION_SKINS: Record<MutationId, { body: string; trim: string }> = {
   'hyper-speed': { body: '#a855f7', trim: '#e9d5ff' },
@@ -579,6 +626,10 @@ export class Game {
   /** Frozen Data Chips banked from chapter 2 kills. */
   chipsEarned = 0
   extracted = 0
+  /** Spore Hives burst this mission. */
+  hivesDestroyed = 0
+  /** Supply crates hauled out this mission. */
+  cratesCollected = 0
   deathCause: DeathCause = 'wounds'
   weapon: Weapon = weaponById('rusty-pistol')
   character: Character = characterById('nature-lover')
@@ -618,6 +669,10 @@ export class Game {
   private acid: AcidPool[] = []
   private blasts: Blast[] = []
   private generator: Generator | null = null
+  private hives: Hive[] = []
+  private crates: Crate[] = []
+  /** Set once a player stands inside the jungle extraction hatch. */
+  private raceEscaped = false
   /** Seconds left on a Hold the Line siege. */
   private holdTimer = 0
   private mutation: Mutation | null = null
@@ -814,6 +869,9 @@ export class Game {
     this.scrapEarned = 0
     this.chipsEarned = 0
     this.extracted = 0
+    this.hivesDestroyed = 0
+    this.cratesCollected = 0
+    this.raceEscaped = false
     this.spawned = 0
     this.spawnTimer = 0
     this.deathCause = 'wounds'
@@ -849,13 +907,42 @@ export class Game {
     this.shake = 0
     this.cameraEase = 0
 
+    // Spore Hives and supply crates sit at fixed, hand-placed jungle spots so
+    // the objective layout is identical every run.
+    this.hives =
+      mission.type === 'overgrowth'
+        ? (this.map.hives ?? []).map((h) => ({
+            x: h.x,
+            y: h.y,
+            r: HIVE_RADIUS,
+            hp: HIVE_HP,
+            maxHp: HIVE_HP,
+            hurt: 0,
+            pulse: Math.random() * 6,
+            spawnTimer: 1 + Math.random(),
+          }))
+        : []
+    this.crates =
+      mission.type === 'supply'
+        ? (this.map.crates ?? []).map((c) => ({
+            x: c.x,
+            y: c.y,
+            r: CRATE_RADIUS,
+            progress: 0,
+            collected: false,
+          }))
+        : []
+
     this.players = []
     characters.slice(0, 2).forEach((c, i) => {
       const id: 1 | 2 = i === 0 ? 1 : 2
       // Player 1 starts near the middle of the map, not pinned to an edge —
       // except on the finale, where the walk to the hive centre is the trigger
-      // for the boss reveal.
-      const centre = { x: this.map.width / 2, y: this.map.height / 2 }
+      // for the boss reveal, and the valley, which starts at the run's mouth.
+      const centre =
+        mission.type === 'race' && this.map.spawn
+          ? this.map.spawn
+          : { x: this.map.width / 2, y: this.map.height / 2 }
       const solo =
         mission.type === 'boss'
           ? this.openSpot(PLAYER_RADIUS + 10, centre, BOSS_REVEAL_RANGE * 2.2, 1200)
@@ -1083,6 +1170,7 @@ export class Game {
       generator: this.generator
         ? { hp: Math.max(0, Math.round(this.generator.hp)), maxHp: this.generator.maxHp }
         : null,
+      jungle: this.jungleObjective(),
       chips: this.chipsEarned,
       boss: this.boss
         ? {
@@ -1153,6 +1241,9 @@ export class Game {
     this.updatePickups(dt)
     this.updateAcid(dt)
     this.updateBlasts(dt)
+    this.updateHives(dt)
+    this.updateCrates(dt)
+    this.updateRace()
     this.updateMutation(dt)
     if (this.generator) this.generator.hurt = Math.max(0, this.generator.hurt - dt)
     if (this.mission?.type === 'hold') this.holdTimer = Math.max(0, this.holdTimer - dt)
@@ -1230,6 +1321,78 @@ export class Game {
     }
   }
 
+  /**
+   * Spore Hives never move: they breathe, soak up fire and keep hatching bugs
+   * until they are shot apart.
+   */
+  private updateHives(dt: number) {
+    if (!this.hives.length) return
+    for (const hive of this.hives) {
+      hive.pulse += dt
+      hive.hurt = Math.max(0, hive.hurt - dt)
+      hive.spawnTimer -= dt
+      if (hive.spawnTimer > 0) continue
+      hive.spawnTimer = HIVE_BROOD_INTERVAL
+      if (this.enemies.length >= this.hives.length * HIVE_BROOD_MAX) continue
+      const a = Math.random() * Math.PI * 2
+      const d = hive.r + 20
+      this.enemies.push(this.makeBug({ x: hive.x + Math.cos(a) * d, y: hive.y + Math.sin(a) * d }))
+    }
+  }
+
+  /** A burst hive sprays its brood chamber across the hollow. */
+  private burstHive(index: number) {
+    const hive = this.hives[index]
+    this.hives.splice(index, 1)
+    this.hivesDestroyed += 1
+    this.shake = Math.max(this.shake, 0.8)
+    playSfx('explosion')
+    for (let i = 0; i < 26; i++) {
+      const a = Math.random() * Math.PI * 2
+      const speed = 90 + Math.random() * 320
+      this.gibs.push({
+        x: hive.x,
+        y: hive.y,
+        vx: Math.cos(a) * speed,
+        vy: Math.sin(a) * speed,
+        r: 4 + Math.random() * 8,
+        life: 1,
+        decay: 0.5 + Math.random() * 0.6,
+        color: Math.random() < 0.5 ? '#a3e635' : '#65a30d',
+      })
+    }
+  }
+
+  /** Supply crates are hauled out by standing on one and holding the key. */
+  private updateCrates(dt: number) {
+    if (!this.crates.length) return
+    for (const crate of this.crates) {
+      if (crate.collected) continue
+      const hauler = this.alivePlayers.some(
+        (p) => Math.hypot(p.x - crate.x, p.y - crate.y) < p.r + crate.r + 12
+      )
+      if (!hauler || !keysPressed.interact) {
+        crate.progress = Math.max(0, crate.progress - dt / CRATE_COLLECT_TIME)
+        continue
+      }
+      crate.progress += dt / CRATE_COLLECT_TIME
+      if (crate.progress < 1) continue
+      crate.progress = 1
+      crate.collected = true
+      this.cratesCollected += 1
+      playSfx('medkit')
+    }
+  }
+
+  /** The valley run ends the moment anyone stands in the escape hatch. */
+  private updateRace() {
+    if (this.mission?.type !== 'race' || this.raceEscaped) return
+    const hatch = this.map.extraction
+    this.raceEscaped = this.alivePlayers.some(
+      (p) => Math.hypot(p.x - hatch.x, p.y - hatch.y) < EXTRACTION_RADIUS
+    )
+  }
+
   /** Cryo shockwaves are pure decoration once their damage has landed. */
   private updateBlasts(dt: number) {
     for (let i = this.blasts.length - 1; i >= 0; i--) {
@@ -1239,14 +1402,57 @@ export class Game {
     }
   }
 
-  /** Chapter 2 mutations carry 50% more health than their chapter 1 kin. */
+  /** Arctic infected carry 50% more health; jungle infected carry double. */
   private get hpScale(): number {
-    return this.mission?.chapter === 2 ? CH2_HP_SCALE : 1
+    const chapter = this.mission?.chapter
+    if (chapter === 3) return CH3_HP_SCALE
+    return chapter === 2 ? CH2_HP_SCALE : 1
   }
 
-  /** ...and hit 30% harder. */
+  /** ...and both hit 30% harder than their chapter 1 kin. */
   private get damageScale(): number {
-    return this.mission?.chapter === 2 ? CH2_DAMAGE_SCALE : 1
+    const chapter = this.mission?.chapter
+    if (chapter === 3) return CH3_DAMAGE_SCALE
+    return chapter === 2 ? CH2_DAMAGE_SCALE : 1
+  }
+
+  /** Progress counter shown on the HUD for the three jungle mission modes. */
+  private jungleObjective(): HudObjective | null {
+    const type = this.mission?.type
+    if (type === 'overgrowth') {
+      return {
+        label: 'Spore Hives destroyed',
+        done: this.hivesDestroyed,
+        total: this.hivesDestroyed + this.hives.length,
+      }
+    }
+    if (type === 'supply') {
+      return {
+        label: 'Supply crates recovered',
+        done: this.cratesCollected,
+        total: this.crates.length,
+      }
+    }
+    if (type === 'race') {
+      return {
+        label: 'Run to extraction',
+        done: Math.round(this.raceProgress * 100),
+        total: 100,
+      }
+    }
+    return null
+  }
+
+  /** 0→1 along the valley, measured from the spawn end to the hatch. */
+  private get raceProgress(): number {
+    const start = this.map.spawn
+    if (!start) return 0
+    const target = this.map.extraction
+    const span = Math.hypot(target.x - start.x, target.y - start.y) || 1
+    const lead = this.alivePlayers.length ? this.alivePlayers : this.players
+    if (!lead.length) return 0
+    const best = Math.min(...lead.map((p) => Math.hypot(target.x - p.x, target.y - p.y)))
+    return clamp(1 - best / span, 0, 1)
   }
 
   /** Occasional groans from the horde while enemies are around. */
@@ -1284,6 +1490,21 @@ export class Game {
         return
       }
       if (this.kills >= mission.target) {
+        this.finish('won')
+        return
+      }
+    } else if (mission.type === 'overgrowth') {
+      if (!this.hives.length) {
+        this.finish('won')
+        return
+      }
+    } else if (mission.type === 'supply') {
+      if (this.crates.length && this.crates.every((c) => c.collected)) {
+        this.finish('won')
+        return
+      }
+    } else if (mission.type === 'race') {
+      if (this.raceEscaped) {
         this.finish('won')
         return
       }
@@ -1519,7 +1740,11 @@ export class Game {
     const boosted = p.character.id === 'army-retiree' && p.abilityActive > 0
     p.chill = Math.max(0, p.chill - dt)
     const step =
-      p.speed * (boosted ? OVERDRIVE_SPEED : 1) * (p.chill > 0 ? CHILL_SLOW : 1) * dt
+      p.speed *
+      (boosted ? OVERDRIVE_SPEED : 1) *
+      (p.chill > 0 ? CHILL_SLOW : 1) *
+      (inMud(this.map, p.x, p.y) ? MUD_SLOW : 1) *
+      dt
     p.vx = dx * step
     p.vy = dy * step
     this.moveCircle(p, p.vx, p.vy)
@@ -1734,10 +1959,12 @@ export class Game {
           w.perk === 'thermal-lance' ? 120 : w.perk === 'armor-piercing' ? 56 : w.pellets > 1 ? 10 : 18,
         damage,
         pierce: w.perk === 'armor-piercing' || Boolean(w.piercing),
-        poison: acidShot,
+        poison: acidShot || Boolean(w.venom),
         ignite: w.perk === 'dragons-breath',
         cryo: cryoShot,
-        ignoreArmour: Boolean(w.piercing),
+        venom: Boolean(w.venom),
+        // Acid needles eat straight through hardened shells.
+        ignoreArmour: Boolean(w.piercing) || Boolean(w.venom),
         blast: w.blastRadius ?? 0,
         blastFreeze: w.blastFreeze ?? 0,
         color: cryoShot
@@ -1882,6 +2109,7 @@ export class Game {
       poison: false,
       ignite: false,
       cryo: false,
+      venom: false,
       ignoreArmour: false,
       blast: 0,
       blastFreeze: 0,
@@ -1916,6 +2144,17 @@ export class Game {
         if (!b.pierce) dead = true
       }
       if (!dead) {
+        for (let h = this.hives.length - 1; h >= 0; h--) {
+          const hive = this.hives[h]
+          if (segmentDistance(hive.x, hive.y, px, py, b.x, b.y) >= hive.r) continue
+          hive.hp -= b.damage
+          hive.hurt = 0.14
+          if (hive.hp <= 0) this.burstHive(h)
+          if (!b.pierce) dead = true
+          break
+        }
+      }
+      if (!dead) {
         for (let j = this.enemies.length - 1; j >= 0; j--) {
           const e = this.enemies[j]
           if (b.hit.has(e)) continue
@@ -1924,7 +2163,11 @@ export class Game {
           const travelled = 1 - b.life / b.maxLife
           const armour = b.ignoreArmour ? 1 : this.mutationArmour
           e.hp -= b.damage * (1 - (1 - b.falloff) * travelled) * armour
-          if (b.poison) e.poison = POISON_DURATION
+          if (b.poison) {
+            e.poison = POISON_DURATION
+            // Acid needles pile up; a single acidic-spray round does not.
+            if (b.venom) e.poisonStacks = Math.min(MAX_POISON_STACKS, e.poisonStacks + 1)
+          }
           if (b.cryo) e.slow = CRYO_SLOW_TIME
           if (b.ignite && e.kind === 'bug' && Math.random() < IGNITE_CHANCE) e.burn = BURN_DURATION
           if (e.hp <= 0) this.killEnemy(j)
@@ -2426,7 +2669,8 @@ export class Game {
       z.wobble += dt
       if (z.poison > 0) {
         z.poison -= dt
-        z.hp -= POISON_DPS * dt
+        z.hp -= POISON_DPS * Math.max(1, z.poisonStacks) * dt
+        if (z.poison <= 0) z.poisonStacks = 0
       }
       if (z.burn > 0) {
         z.burn -= dt
@@ -2563,6 +2807,12 @@ export class Game {
     const boss = mission.type === 'boss'
     const hold = mission.type === 'hold'
     const generator = mission.type === 'generator'
+    const overgrowth = mission.type === 'overgrowth'
+    const supply = mission.type === 'supply'
+    // The valley gauntlet thickens the further down it the players push.
+    const race = mission.type === 'race'
+    const jungle = overgrowth || supply || race
+    const raceRamp = race ? this.raceProgress : 0
     // Hold the Line ramps from a trickle to a wall of bodies by the last second.
     const holdProgress = hold && mission.holdTime ? 1 - this.holdTimer / mission.holdTime : 0
     const ramp = 1 + holdProgress * (HOLD_RAMP - 1)
@@ -2574,9 +2824,15 @@ export class Game {
           ? Math.round(6 * ramp)
           : generator
             ? 12
-            : Math.min(14, Math.max(4, Math.ceil(mission.target / 3)))
+            : race
+              ? Math.round(8 + raceRamp * 10)
+              : overgrowth
+                ? 8
+                : supply
+                  ? 10
+                  : Math.min(14, Math.max(4, Math.ceil(mission.target / 3)))
     if (this.enemies.length >= maxAlive) return
-    if (!protect && !boss && !hold) {
+    if (!protect && !boss && !hold && !jungle) {
       const remaining = mission.target - this.kills
       if (this.spawned - this.kills >= remaining + 4) return
     }
@@ -2591,7 +2847,11 @@ export class Game {
           ? Math.max(0.35, 1.6 / ramp)
           : generator
             ? 0.8
-            : 0.9
+            : race
+              ? Math.max(0.35, 1.4 - raceRamp)
+              : jungle
+                ? 1.2
+                : 0.9
 
     const spot = this.spawnPoint()
     if (!spot) return
@@ -2624,6 +2884,7 @@ export class Game {
       wobble: Math.random() * 10,
       retreat: 0,
       poison: 0,
+      poisonStacks: 0,
       burn: 0,
       vision: ZOMBIE_VISION,
       aware: false,
@@ -2648,6 +2909,7 @@ export class Game {
       wobble: Math.random() * 10,
       retreat: 0,
       poison: 0,
+      poisonStacks: 0,
       burn: 0,
       vision: ZOMBIE_VISION,
       aware: false,
@@ -2672,6 +2934,7 @@ export class Game {
       wobble: Math.random() * 10,
       retreat: 0,
       poison: 0,
+      poisonStacks: 0,
       burn: 0,
       vision: ZOMBIE_VISION,
       aware: false,
@@ -2695,6 +2958,7 @@ export class Game {
       wobble: Math.random() * 10,
       retreat: 0,
       poison: 0,
+      poisonStacks: 0,
       burn: 0,
       vision: BUG_VISION,
       aware: false,
@@ -2777,7 +3041,8 @@ export class Game {
     ctx.fillRect(0, 0, m.width, m.height)
     this.drawFloor()
     this.drawMapLabel()
-    if (this.mission?.type === 'protect') this.drawExtraction()
+    for (const pit of m.mud ?? []) this.drawMud(pit)
+    if (this.mission?.type === 'protect' || this.mission?.type === 'race') this.drawExtraction()
 
     for (const w of m.walls) {
       if (this.textures === 'enhanced') this.drawStructure3D(w)
@@ -2800,6 +3065,8 @@ export class Game {
     for (const t of this.turrets) this.drawTurret(t)
 
     for (const pool of this.acid) this.drawAcid(pool)
+    for (const crate of this.crates) this.drawCrate(crate)
+    for (const hive of this.hives) this.drawHive(hive)
     if (this.generator) this.drawGenerator(this.generator)
     for (const blast of this.blasts) this.drawBlast(blast)
 
@@ -2923,6 +3190,27 @@ export class Game {
           ctx.ellipse(x + 30, y + 34, r, r * 0.5, 0, 0, Math.PI * 2)
           ctx.fill()
         }
+      }
+    } else if (m.floor === 'jungle') {
+      // Leaf litter and creeping roots, laid out from the coordinates so the
+      // canopy floor never reshuffles between frames.
+      ctx.fillStyle = 'rgba(132,204,22,0.07)'
+      for (let y = Math.floor(y0 / 64) * 64; y < y1; y += 64) {
+        for (let x = Math.floor(x0 / 64) * 64 + ((y / 64) % 2 ? 32 : 0); x < x1; x += 64) {
+          const r = ((x * 19 + y * 11) % 10) + 7
+          ctx.beginPath()
+          ctx.ellipse(x + 22, y + 26, r, r * 0.45, (x % 7) * 0.4, 0, Math.PI * 2)
+          ctx.fill()
+        }
+      }
+      ctx.strokeStyle = 'rgba(20,60,25,0.35)'
+      ctx.lineWidth = 4
+      for (let y = Math.floor(y0 / 210) * 210; y < y1; y += 210) {
+        ctx.beginPath()
+        for (let x = x0; x < x1; x += 40) {
+          ctx.lineTo(x, y + Math.sin(x / 130 + y / 210) * 26)
+        }
+        ctx.stroke()
       }
     } else if (m.floor === 'organic') {
       ctx.strokeStyle = 'rgba(224,163,255,0.12)'
@@ -3559,6 +3847,111 @@ export class Game {
     ctx.restore()
   }
 
+  /** A mud pit: a dark, wet patch that visibly bogs the players down. */
+  private drawMud(pit: Rect) {
+    const ctx = this.ctx
+    ctx.save()
+    ctx.fillStyle = 'rgba(48,34,18,0.75)'
+    ctx.beginPath()
+    ctx.ellipse(pit.x + pit.w / 2, pit.y + pit.h / 2, pit.w / 2, pit.h / 2, 0, 0, Math.PI * 2)
+    ctx.fill()
+    ctx.strokeStyle = 'rgba(120,86,44,0.7)'
+    ctx.lineWidth = 3
+    ctx.stroke()
+    ctx.fillStyle = 'rgba(146,110,60,0.35)'
+    for (let i = 0; i < 5; i++) {
+      const a = (i / 5) * Math.PI * 2
+      ctx.beginPath()
+      ctx.ellipse(
+        pit.x + pit.w / 2 + Math.cos(a) * pit.w * 0.24,
+        pit.y + pit.h / 2 + Math.sin(a) * pit.h * 0.24,
+        pit.w * 0.08,
+        pit.h * 0.05,
+        a,
+        0,
+        Math.PI * 2
+      )
+      ctx.fill()
+    }
+    ctx.restore()
+  }
+
+  /** A Spore Hive: a breathing egg sack that splits open as it takes fire. */
+  private drawHive(hive: Hive) {
+    const ctx = this.ctx
+    const beat = 1 + Math.sin(hive.pulse * 2.2) * 0.06
+    const pct = Math.max(0, hive.hp / hive.maxHp)
+    ctx.save()
+    this.drawGroundShadow(hive.x, hive.y, hive.r)
+    ctx.translate(hive.x, hive.y)
+    ctx.beginPath()
+    ctx.ellipse(0, 0, hive.r * beat, hive.r * 1.15 * beat, 0, 0, Math.PI * 2)
+    ctx.fillStyle = hive.hurt > 0 ? '#fca5a5' : '#4d7c0f'
+    ctx.fill()
+    ctx.strokeStyle = '#1a2e05'
+    ctx.lineWidth = 4
+    ctx.stroke()
+
+    // Eggs inside the sack, and splits that widen as the hive is chewed down.
+    ctx.fillStyle = 'rgba(190,242,100,0.75)'
+    for (let i = 0; i < 6; i++) {
+      const a = (i / 6) * Math.PI * 2 + hive.pulse * 0.4
+      ctx.beginPath()
+      ctx.arc(Math.cos(a) * hive.r * 0.45, Math.sin(a) * hive.r * 0.5, hive.r * 0.16, 0, Math.PI * 2)
+      ctx.fill()
+    }
+    ctx.strokeStyle = 'rgba(20,10,4,0.7)'
+    ctx.lineWidth = 3
+    for (let i = 0; i < Math.round((1 - pct) * 5); i++) {
+      const a = (i / 5) * Math.PI * 2
+      ctx.beginPath()
+      ctx.moveTo(Math.cos(a) * hive.r * 0.2, Math.sin(a) * hive.r * 0.2)
+      ctx.lineTo(Math.cos(a) * hive.r * 0.95, Math.sin(a) * hive.r * 0.95)
+      ctx.stroke()
+    }
+
+    ctx.fillStyle = 'rgba(0,0,0,0.6)'
+    ctx.fillRect(-hive.r, -hive.r * 1.55, hive.r * 2, 9)
+    ctx.fillStyle = pct > 0.5 ? '#a3e635' : pct > 0.25 ? '#facc15' : '#ef4444'
+    ctx.fillRect(-hive.r, -hive.r * 1.55, hive.r * 2 * pct, 9)
+    ctx.restore()
+  }
+
+  /** A supply crate, with the hold-to-collect ring drawn around it. */
+  private drawCrate(crate: Crate) {
+    const ctx = this.ctx
+    ctx.save()
+    ctx.translate(crate.x, crate.y)
+    if (crate.collected) {
+      // Nothing but the stripped pallet is left behind.
+      ctx.globalAlpha = 0.45
+      ctx.strokeStyle = '#78716c'
+      ctx.lineWidth = 3
+      ctx.strokeRect(-crate.r, -crate.r * 0.7, crate.r * 2, crate.r * 1.4)
+      ctx.restore()
+      return
+    }
+    ctx.fillStyle = '#b45309'
+    ctx.fillRect(-crate.r, -crate.r * 0.8, crate.r * 2, crate.r * 1.6)
+    ctx.strokeStyle = '#3f2d12'
+    ctx.lineWidth = 3
+    ctx.strokeRect(-crate.r, -crate.r * 0.8, crate.r * 2, crate.r * 1.6)
+    ctx.strokeStyle = '#fbbf24'
+    ctx.lineWidth = 4
+    ctx.beginPath()
+    ctx.moveTo(-crate.r, 0)
+    ctx.lineTo(crate.r, 0)
+    ctx.stroke()
+    if (crate.progress > 0) {
+      ctx.strokeStyle = '#a3e635'
+      ctx.lineWidth = 5
+      ctx.beginPath()
+      ctx.arc(0, 0, crate.r + 12, -Math.PI / 2, -Math.PI / 2 + crate.progress * Math.PI * 2)
+      ctx.stroke()
+    }
+    ctx.restore()
+  }
+
   private drawSurvivor(s: Survivor) {
     const ctx = this.ctx
     ctx.beginPath()
@@ -3828,24 +4221,52 @@ export class Game {
     this.drawStatusRing(z)
     const enhanced = this.textures === 'enhanced'
     const y = enhanced ? z.y - UNIT_LIFT : z.y
-    const flat = z.r > 16 ? '#8b1414' : '#d62828'
-    this.drawReachingHands(z, y, this.enemySkinColor(flat), '#4a0a0a')
+    const mossy = this.mission?.chapter === 3
+    const flat = mossy ? (z.r > 16 ? '#3f6212' : '#4d7c0f') : z.r > 16 ? '#8b1414' : '#d62828'
+    const outline = mossy ? '#1a2e05' : '#4a0a0a'
+    this.drawReachingHands(z, y, this.enemySkinColor(flat), outline)
     ctx.beginPath()
     ctx.arc(z.x, y, z.r, 0, Math.PI * 2)
     if (enhanced) {
       // Shaded sphere so the body reads as standing above its shadow.
       const grad = ctx.createRadialGradient(z.x - z.r * 0.35, y - z.r * 0.4, z.r * 0.15, z.x, y, z.r)
-      grad.addColorStop(0, z.r > 16 ? '#c94141' : '#ff6b5e')
-      grad.addColorStop(1, z.r > 16 ? '#5c0d0d' : '#8f1616')
+      grad.addColorStop(0, mossy ? '#84cc16' : z.r > 16 ? '#c94141' : '#ff6b5e')
+      grad.addColorStop(1, mossy ? '#1f3b07' : z.r > 16 ? '#5c0d0d' : '#8f1616')
       ctx.fillStyle = grad
     } else {
       ctx.fillStyle = flat
     }
     ctx.fill()
-    ctx.strokeStyle = '#4a0a0a'
+    ctx.strokeStyle = outline
     ctx.lineWidth = 2
     ctx.stroke()
+    if (mossy) this.drawMoss(z, y)
     this.drawMutationSkin(z, y, z.r)
+  }
+
+  /**
+   * Jungle infected wear the canopy: clumps of moss and a vine trailing off
+   * the body. Mutation skins still paint over the top of it.
+   */
+  private drawMoss(z: Enemy, y: number) {
+    const ctx = this.ctx
+    ctx.save()
+    ctx.translate(z.x, y)
+    ctx.fillStyle = 'rgba(163,230,53,0.55)'
+    for (let i = 0; i < 5; i++) {
+      const a = (i / 5) * Math.PI * 2 + z.driftAngle
+      const d = z.r * 0.55
+      ctx.beginPath()
+      ctx.ellipse(Math.cos(a) * d, Math.sin(a) * d, z.r * 0.26, z.r * 0.17, a, 0, Math.PI * 2)
+      ctx.fill()
+    }
+    ctx.strokeStyle = 'rgba(101,163,13,0.85)'
+    ctx.lineWidth = 2
+    ctx.beginPath()
+    ctx.moveTo(-z.r * 0.6, -z.r * 0.2)
+    ctx.quadraticCurveTo(0, z.r * 0.35 + Math.sin(z.wobble * 3) * 2, z.r * 0.7, -z.r * 0.35)
+    ctx.stroke()
+    ctx.restore()
   }
 
   /** Toxic Blood residue: a bubbling green puddle that fades out. */

@@ -16,6 +16,8 @@ export const keysPressed = {
   right: false,
   // Mouse fire button, tracked independently of every key above.
   shooting: false,
+  // Held to collect supply crates; shared by both local players.
+  interact: false,
 }
 
 export type MovementKey = 'w' | 'a' | 's' | 'd' | 'up' | 'down' | 'left' | 'right'
@@ -103,6 +105,7 @@ export function bindInput(canvas: HTMLCanvasElement, actions: InputActions) {
         actions.p2Barricade()
         break
       case ' ':
+        keysPressed.interact = true
         e.preventDefault()
         break
     }
@@ -111,6 +114,7 @@ export function bindInput(canvas: HTMLCanvasElement, actions: InputActions) {
   window.addEventListener('keyup', (e) => {
     const flag = movementFlag(e)
     if (flag) keysPressed[flag] = false
+    if (e.key === ' ') keysPressed.interact = false
   })
 
   // A window that loses focus stops receiving keyup, so drop everything.

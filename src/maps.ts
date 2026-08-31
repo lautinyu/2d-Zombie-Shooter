@@ -23,9 +23,12 @@ export type MapId =
   | 'cryolab'
   | 'camp'
   | 'frozencore'
+  | 'canopy'
+  | 'thicket'
+  | 'valley'
 
 /** Ground texture painted under everything else. */
-export type FloorStyle = 'asphalt' | 'wood' | 'organic' | 'dirt' | 'ice' | 'snow'
+export type FloorStyle = 'asphalt' | 'wood' | 'organic' | 'dirt' | 'ice' | 'snow' | 'jungle'
 
 export interface GameMap {
   id: MapId
@@ -42,6 +45,14 @@ export interface GameMap {
   walls: Rect[]
   /** Where escorted survivors run to. */
   extraction: { x: number; y: number }
+  /** Fixed Spore Hive nests for 'overgrowth' missions. */
+  hives?: { x: number; y: number }[]
+  /** Fixed supply crate drops for 'supply' missions. */
+  crates?: { x: number; y: number }[]
+  /** Traversable pits that slow anything wading through them. */
+  mud?: Rect[]
+  /** Forced player start, used by the linear extraction valley. */
+  spawn?: { x: number; y: number }
 }
 
 const BORDER = 30
@@ -458,6 +469,119 @@ const FROZEN_CORE: GameMap = {
   ],
 }
 
+/** Chapter 3: the hollow where three Spore Hives are rooted. */
+const CANOPY: GameMap = {
+  id: 'canopy',
+  name: 'The Spore Hollow',
+  width: 1900,
+  height: 1600,
+  color: '#1d3020',
+  wallColor: '#4b5f34',
+  wallEdge: '#26331b',
+  floor: 'jungle',
+  accent: '#a3e635',
+  extraction: { x: 1740, y: 1440 },
+  hives: [
+    { x: 420, y: 380 },
+    { x: 1500, y: 520 },
+    { x: 900, y: 1260 },
+  ],
+  walls: [
+    ...border(1900, 1600),
+    ...partitions([
+      { x: 250, y: 700, w: 420, h: 80 },
+      { x: 1150, y: 820, w: 420, h: 80 },
+      { x: 780, y: 200, w: 80, h: 300 },
+      { x: 1620, y: 1000, w: 80, h: 320 },
+      { x: 220, y: 1050, w: 80, h: 300 },
+      { x: 640, y: 620, w: 90, h: 90 },
+      { x: 1280, y: 300, w: 90, h: 90 },
+    ]),
+  ],
+  mud: [
+    { x: 700, y: 880, w: 320, h: 220 },
+    { x: 1380, y: 1180, w: 260, h: 200 },
+  ],
+}
+
+/** Chapter 3: a wide maze of overgrown ruins hiding the supply drop. */
+const THICKET: GameMap = {
+  id: 'thicket',
+  name: 'The Overgrown Thicket',
+  width: 2400,
+  height: 1900,
+  color: '#1a2c1d',
+  wallColor: '#3f5730',
+  wallEdge: '#1f2b16',
+  floor: 'jungle',
+  accent: '#84cc16',
+  extraction: { x: 2220, y: 1740 },
+  crates: [
+    { x: 300, y: 320 },
+    { x: 2100, y: 380 },
+    { x: 340, y: 1620 },
+    { x: 2080, y: 1560 },
+  ],
+  // Hedgerows laid out as corridors and dead ends.
+  walls: [
+    ...border(2400, 1900),
+    ...partitions([
+      { x: 200, y: 520, w: 700, h: 70 },
+      { x: 1080, y: 200, w: 70, h: 560 },
+      { x: 1340, y: 520, w: 860, h: 70 },
+      { x: 480, y: 760, w: 70, h: 520 },
+      { x: 760, y: 900, w: 620, h: 70 },
+      { x: 1620, y: 760, w: 70, h: 540 },
+      { x: 1840, y: 980, w: 420, h: 70 },
+      { x: 200, y: 1280, w: 620, h: 70 },
+      { x: 1080, y: 1180, w: 70, h: 540 },
+      { x: 1340, y: 1400, w: 700, h: 70 },
+      { x: 620, y: 1560, w: 70, h: 300 },
+      { x: 2060, y: 1120, w: 70, h: 300 },
+    ]),
+  ],
+  mud: [
+    { x: 900, y: 1000, w: 300, h: 260 },
+    { x: 1700, y: 300, w: 260, h: 220 },
+    { x: 260, y: 900, w: 200, h: 240 },
+  ],
+}
+
+/** Chapter 3: a long linear run from the crash site to the escape hatch. */
+const VALLEY: GameMap = {
+  id: 'valley',
+  name: 'The Sunken Valley',
+  width: 3400,
+  height: 1100,
+  color: '#1b2b1c',
+  wallColor: '#46603a',
+  wallEdge: '#22301a',
+  floor: 'jungle',
+  accent: '#bef264',
+  spawn: { x: 200, y: 550 },
+  extraction: { x: 3200, y: 550 },
+  walls: [
+    ...border(3400, 1100),
+    ...partitions([
+      { x: 560, y: 30, w: 80, h: 380 },
+      { x: 900, y: 690, w: 80, h: 380 },
+      { x: 1280, y: 30, w: 80, h: 340 },
+      { x: 1640, y: 640, w: 80, h: 430 },
+      { x: 2000, y: 30, w: 80, h: 400 },
+      { x: 2380, y: 660, w: 80, h: 410 },
+      { x: 2740, y: 30, w: 80, h: 360 },
+      { x: 1120, y: 470, w: 180, h: 80 },
+      { x: 2180, y: 470, w: 180, h: 80 },
+    ]),
+  ],
+  mud: [
+    { x: 700, y: 380, w: 300, h: 340 },
+    { x: 1420, y: 200, w: 280, h: 420 },
+    { x: 2100, y: 500, w: 320, h: 400 },
+    { x: 2820, y: 300, w: 300, h: 420 },
+  ],
+}
+
 export const MAPS: GameMap[] = [
   STREETS,
   WAREHOUSE,
@@ -472,7 +596,16 @@ export const MAPS: GameMap[] = [
   CRYOLAB,
   CAMP,
   FROZEN_CORE,
+  CANOPY,
+  THICKET,
+  VALLEY,
 ]
+
+/** True when the point sits inside one of the map's mud pits. */
+export function inMud(map: GameMap, x: number, y: number): boolean {
+  if (!map.mud) return false
+  return map.mud.some((p) => x > p.x && x < p.x + p.w && y > p.y && y < p.y + p.h)
+}
 
 export function mapById(id: MapId): GameMap {
   const m = MAPS.find((mm) => mm.id === id)
