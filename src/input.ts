@@ -18,6 +18,9 @@ export const keysPressed = {
   shooting: false,
   // Held to collect supply crates; shared by both local players.
   interact: false,
+  // Per-player retrieve keys: E for player 1, M for player 2.
+  interactP1: false,
+  interactP2: false,
 }
 
 export type MovementKey = 'w' | 'a' | 's' | 'd' | 'up' | 'down' | 'left' | 'right'
@@ -78,8 +81,13 @@ export function bindInput(canvas: HTMLCanvasElement, actions: InputActions) {
       if (SCROLL_KEYS.includes(e.key.toLowerCase())) e.preventDefault()
       return
     }
+    const key = e.key.toLowerCase()
+    // Retrieve is a hold, so its flag is set before the repeat guard drops
+    // the auto-repeat events.
+    if (key === 'e') keysPressed.interactP1 = true
+    if (key === 'm') keysPressed.interactP2 = true
     if (e.repeat) return
-    switch (e.key.toLowerCase()) {
+    switch (key) {
       case 'r':
         actions.reload()
         break
@@ -114,7 +122,10 @@ export function bindInput(canvas: HTMLCanvasElement, actions: InputActions) {
   window.addEventListener('keyup', (e) => {
     const flag = movementFlag(e)
     if (flag) keysPressed[flag] = false
-    if (e.key === ' ') keysPressed.interact = false
+    const key = e.key.toLowerCase()
+    if (key === ' ') keysPressed.interact = false
+    if (key === 'e') keysPressed.interactP1 = false
+    if (key === 'm') keysPressed.interactP2 = false
   })
 
   // A window that loses focus stops receiving keyup, so drop everything.

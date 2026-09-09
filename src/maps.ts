@@ -23,9 +23,13 @@ export type MapId =
   | 'cryolab'
   | 'camp'
   | 'frozencore'
+  | 'abandonedlab'
+  | 'concourse'
   | 'canopy'
   | 'thicket'
   | 'valley'
+  | 'marshlands'
+  | 'infiltration'
 
 /** Ground texture painted under everything else. */
 export type FloorStyle = 'asphalt' | 'wood' | 'organic' | 'dirt' | 'ice' | 'snow' | 'jungle'
@@ -469,6 +473,74 @@ const FROZEN_CORE: GameMap = {
   ],
 }
 
+/** Chapter 2: the derelict research wing the staff evacuated first. */
+const ABANDONED_LAB: GameMap = {
+  id: 'abandonedlab',
+  name: 'The Abandoned Lab',
+  width: 1700,
+  height: 1400,
+  color: '#25404d',
+  wallColor: '#93b8cc',
+  wallEdge: '#42606f',
+  floor: 'ice',
+  accent: '#cfeaff',
+  extraction: { x: 1540, y: 1240 },
+  // Ransacked labs off a central corridor, every room with a way in.
+  walls: [
+    ...border(1700, 1400),
+    ...partitions([
+      { x: 400, y: 200, w: 40, h: 320 },
+      { x: 440, y: 200, w: 300, h: 40 },
+      { x: 980, y: 200, w: 320, h: 40 },
+      { x: 1260, y: 240, w: 40, h: 280 },
+      { x: 220, y: 640, w: 360, h: 40 },
+      { x: 780, y: 620, w: 40, h: 260 },
+      { x: 1120, y: 640, w: 360, h: 40 },
+      { x: 400, y: 900, w: 40, h: 300 },
+      { x: 440, y: 1160, w: 320, h: 40 },
+      { x: 980, y: 1160, w: 320, h: 40 },
+      { x: 1260, y: 900, w: 40, h: 300 },
+      // Toppled benches and specimen cabinets.
+      { x: 620, y: 420, w: 90, h: 90 },
+      { x: 1000, y: 800, w: 90, h: 90 },
+      { x: 300, y: 820, w: 80, h: 80 },
+      { x: 1400, y: 400, w: 80, h: 80 },
+    ]),
+  ],
+}
+
+/** Chapter 2: the long transit concourse linking the facility wings. */
+const CONCOURSE: GameMap = {
+  id: 'concourse',
+  name: 'Sub-Zero Concourse',
+  width: 2200,
+  height: 1200,
+  color: '#2e4a5a',
+  wallColor: '#a6cbdf',
+  wallEdge: '#4a7188',
+  floor: 'ice',
+  accent: '#e2f4ff',
+  extraction: { x: 2040, y: 600 },
+  walls: [
+    ...border(2200, 1200),
+    ...partitions([
+      // Frozen check-in counters lining a wide central walkway.
+      { x: 260, y: 260, w: 380, h: 44 },
+      { x: 820, y: 260, w: 420, h: 44 },
+      { x: 1420, y: 260, w: 420, h: 44 },
+      { x: 260, y: 896, w: 420, h: 44 },
+      { x: 860, y: 896, w: 400, h: 44 },
+      { x: 1440, y: 896, w: 400, h: 44 },
+      { x: 620, y: 480, w: 44, h: 240 },
+      { x: 1180, y: 480, w: 44, h: 240 },
+      { x: 1740, y: 480, w: 44, h: 240 },
+      { x: 360, y: 560, w: 110, h: 90 },
+      { x: 900, y: 620, w: 110, h: 90 },
+      { x: 1500, y: 540, w: 110, h: 90 },
+    ]),
+  ],
+}
+
 /** Chapter 3: the hollow where three Spore Hives are rooted. */
 const CANOPY: GameMap = {
   id: 'canopy',
@@ -582,6 +654,75 @@ const VALLEY: GameMap = {
   ],
 }
 
+/** Chapter 3: a flooded basin where the mud is most of the map. */
+const MARSHLANDS: GameMap = {
+  id: 'marshlands',
+  name: 'Toxic Marshlands',
+  width: 2100,
+  height: 1700,
+  color: '#1b2f26',
+  wallColor: '#415b36',
+  wallEdge: '#22301b',
+  floor: 'jungle',
+  accent: '#86efac',
+  extraction: { x: 1940, y: 1540 },
+  walls: [
+    ...border(2100, 1700),
+    ...partitions([
+      // Rotting boardwalks and sunken roots forming narrow dry paths.
+      { x: 300, y: 380, w: 520, h: 70 },
+      { x: 1120, y: 300, w: 70, h: 420 },
+      { x: 1380, y: 620, w: 480, h: 70 },
+      { x: 340, y: 780, w: 70, h: 440 },
+      { x: 700, y: 1080, w: 520, h: 70 },
+      { x: 1560, y: 1100, w: 70, h: 380 },
+      { x: 820, y: 620, w: 100, h: 100 },
+      { x: 1780, y: 340, w: 100, h: 100 },
+    ]),
+  ],
+  mud: [
+    { x: 460, y: 500, w: 420, h: 260 },
+    { x: 1200, y: 780, w: 340, h: 300 },
+    { x: 640, y: 1200, w: 380, h: 300 },
+    { x: 1620, y: 260, w: 300, h: 280 },
+  ],
+}
+
+/** Chapter 3: the tight ruin corridors under the canopy roots. */
+const INFILTRATION: GameMap = {
+  id: 'infiltration',
+  name: 'Canopy Infiltration',
+  width: 1800,
+  height: 1500,
+  color: '#182a1b',
+  wallColor: '#3d5530',
+  wallEdge: '#1e2a15',
+  floor: 'jungle',
+  accent: '#bbf7d0',
+  extraction: { x: 1640, y: 1340 },
+  walls: [
+    ...border(1800, 1500),
+    ...partitions([
+      // Overgrown temple walls: short rooms with staggered doorways.
+      { x: 260, y: 260, w: 420, h: 60 },
+      { x: 860, y: 260, w: 400, h: 60 },
+      { x: 1400, y: 320, w: 60, h: 360 },
+      { x: 260, y: 320, w: 60, h: 340 },
+      { x: 560, y: 560, w: 400, h: 60 },
+      { x: 1120, y: 600, w: 60, h: 340 },
+      { x: 300, y: 860, w: 60, h: 320 },
+      { x: 560, y: 1120, w: 420, h: 60 },
+      { x: 1180, y: 1120, w: 380, h: 60 },
+      { x: 780, y: 820, w: 110, h: 110 },
+      { x: 1440, y: 880, w: 110, h: 110 },
+    ]),
+  ],
+  mud: [
+    { x: 420, y: 680, w: 240, h: 200 },
+    { x: 1200, y: 340, w: 220, h: 200 },
+  ],
+}
+
 export const MAPS: GameMap[] = [
   STREETS,
   WAREHOUSE,
@@ -596,9 +737,13 @@ export const MAPS: GameMap[] = [
   CRYOLAB,
   CAMP,
   FROZEN_CORE,
+  ABANDONED_LAB,
+  CONCOURSE,
   CANOPY,
   THICKET,
   VALLEY,
+  MARSHLANDS,
+  INFILTRATION,
 ]
 
 /** True when the point sits inside one of the map's mud pits. */

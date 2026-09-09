@@ -431,7 +431,7 @@ function renderChapterThree() {
   header.innerHTML = `
     <h3 class="text-sm font-black uppercase tracking-wider text-lime-200">${info.title}</h3>
     <p class="mt-1 text-xs text-slate-400">${info.blurb}</p>
-    <div class="mt-2 text-xs font-semibold text-amber-300">Ancient Amber: ${profile.amber} · moss-caked infected here carry double health. Hold SPACE to haul supply crates.</div>
+    <div class="mt-2 text-xs font-semibold text-amber-300">Ancient Amber: ${profile.amber} · moss-caked infected here carry double health. Hold E (player 2: M) to haul supply crates.</div>
   `
   campaignEl.appendChild(header)
 

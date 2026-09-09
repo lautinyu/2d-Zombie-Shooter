@@ -252,6 +252,10 @@ interface Boss {
   dashDir: { x: number; y: number }
   hurt: number
   attackCooldown: number
+  /** Cryo-Stalker: true once it has burned its one full-health regeneration. */
+  regenerated: boolean
+  /** Permanent movement multiplier layered on top of the phase bonus. */
+  speedMult: number
   /** Runner Alpha: seconds until the next pack-summoning scream. */
   screamTimer: number
   /** Camo Stalker: seconds left of the current visible/invisible stretch. */
@@ -501,6 +505,8 @@ const HIVE_BROOD_MAX = 6
 const CRATE_RADIUS = 22
 /** Seconds of held interaction needed to haul a supply crate out. */
 const CRATE_COLLECT_TIME = 1.2
+/** Gap between player and crate that still counts as standing on the drop. */
+const CRATE_INTERACT_RANGE = 30
 /** Mud pits: everything wading through one moves at 55% pace. */
 const MUD_SLOW = 0.55
 
@@ -598,6 +604,20 @@ const SHARD_SPREAD = 0.22
 const SHARD_SPEED = 430
 const SHARD_LIFE = 2.4
 const SHARD_DAMAGE = 11
+/** Cryo-Stalker regeneration: full heal and a permanent speed hike, once. */
+const CRYO_REGEN_SPEED = 1.25
+const CRYO_REGEN_BANNER = '⚠️ CRYO-STALKER REGENERATED! PHASE 2 START'
+const BANNER_TIME = 3.2
+/** Seconds the white-out flash takes to fade after a banner fires. */
+const FLASH_TIME = 0.6
+/**
+ * Fog of war: how far a player sees on the main canvas, already cut by 30%
+ * from the old 620px sight line for a tighter, darker arena. The minimap is
+ * drawn in screen space afterwards, so it never inherits this mask.
+ */
+const VISIBILITY_BASE_RADIUS = 620
+const VISIBILITY_RADIUS = VISIBILITY_BASE_RADIUS * 0.7
+const DARKNESS = 0.72
 /** Brood Matron: a lighter Hive Mother that guards the skyline. */
 const MATRON_MAX_HP = 1400
 const MATRON_RADIUS = 50
@@ -668,6 +688,13 @@ export class Game {
   private chaseTimer = 0
   private acid: AcidPool[] = []
   private blasts: Blast[] = []
+  /** Centre-screen announcement text, with the seconds it stays up. */
+  private banner = ''
+  private bannerTimer = 0
+  /** Screen-wide flash fired alongside a banner. */
+  private flash = 0
+  /** Offscreen buffer the fog-of-war mask is composited on. */
+  private mask: HTMLCanvasElement | null = null
   private generator: Generator | null = null
   private hives: Hive[] = []
   private crates: Crate[] = []
@@ -871,6 +898,9 @@ export class Game {
     this.extracted = 0
     this.hivesDestroyed = 0
     this.cratesCollected = 0
+    this.banner = ''
+    this.bannerTimer = 0
+    this.flash = 0
     this.raceEscaped = false
     this.spawned = 0
     this.spawnTimer = 0
@@ -1065,6 +1095,8 @@ export class Game {
       dashDir: { x: 1, y: 0 },
       hurt: 0,
       attackCooldown: 0,
+      regenerated: false,
+      speedMult: 1,
       screamTimer: ALPHA_SCREAM_INTERVAL,
       cloakTimer: STALKER_VISIBLE_TIME,
       cloaked: false,
@@ -1210,6 +1242,8 @@ export class Game {
       return
     }
     this.shake = Math.max(0, this.shake - dt * 1.6)
+    this.bannerTimer = Math.max(0, this.bannerTimer - dt)
+    this.flash = Math.max(0, this.flash - dt)
     this.bubbleTimer = Math.max(0, this.bubbleTimer - dt)
     this.cameraEase = Math.max(0, this.cameraEase - dt)
     if (this.reveal === 'playing') {
@@ -1369,9 +1403,9 @@ export class Game {
     for (const crate of this.crates) {
       if (crate.collected) continue
       const hauler = this.alivePlayers.some(
-        (p) => Math.hypot(p.x - crate.x, p.y - crate.y) < p.r + crate.r + 12
+        (p) => this.nearCrate(p, crate) && this.holdingRetrieve(p)
       )
-      if (!hauler || !keysPressed.interact) {
+      if (!hauler) {
         crate.progress = Math.max(0, crate.progress - dt / CRATE_COLLECT_TIME)
         continue
       }
@@ -1382,6 +1416,17 @@ export class Game {
       this.cratesCollected += 1
       playSfx('medkit')
     }
+  }
+
+  /** True while the player stands inside a crate's interaction ring. */
+  private nearCrate(p: Player, crate: Crate): boolean {
+    return Math.hypot(p.x - crate.x, p.y - crate.y) < p.r + crate.r + CRATE_INTERACT_RANGE
+  }
+
+  /** E retrieves for player 1, M for player 2; Space still works for both. */
+  private holdingRetrieve(p: Player): boolean {
+    if (keysPressed.interact) return true
+    return p.id === 1 ? keysPressed.interactP1 : keysPressed.interactP2
   }
 
   /** The valley run ends the moment anyone stands in the escape hatch. */
@@ -1510,6 +1555,12 @@ export class Game {
       }
     } else if (mission.type === 'boss') {
       if (this.boss && this.boss.hp <= 0) {
+        // The Cryo-Stalker refuses to die the first time: it regenerates
+        // instead of handing over the level.
+        if (this.boss.kind === 'cryo-stalker' && !this.boss.regenerated) {
+          this.regenerateCryoStalker(this.boss)
+          return
+        }
         // Chapter bosses close their chapter with a cinematic instead of the
         // usual win screen.
         if (this.boss.kind === 'hive-mother' || this.boss.kind === 'cryo-stalker') {
@@ -1544,6 +1595,29 @@ export class Game {
     }
 
     if (this.players.length && this.players.every((p) => p.down)) this.finish('lost')
+  }
+
+  /**
+   * First time its health pool empties the Cryo-Stalker heals back to full,
+   * announces phase 2 and keeps a permanent movement bonus from then on.
+   */
+  private regenerateCryoStalker(boss: Boss) {
+    boss.regenerated = true
+    boss.hp = boss.maxHp
+    boss.phase = 2
+    boss.speedMult = CRYO_REGEN_SPEED
+    boss.dashTimer = 2
+    boss.hurt = 0.4
+    this.announce(CRYO_REGEN_BANNER)
+    this.shake = Math.max(this.shake, 1.2)
+    playSfx('boss-roar')
+  }
+
+  /** Flashes the screen and holds a banner across the middle of the arena. */
+  private announce(text: string) {
+    this.banner = text
+    this.bannerTimer = BANNER_TIME
+    this.flash = FLASH_TIME
   }
 
   private finish(state: GameState) {
@@ -2411,7 +2485,7 @@ export class Game {
    */
   private updateCryoStalker(b: Boss, dt: number, prey: Player | null) {
     if (prey) {
-      const speed = b.baseSpeed * (b.phase === 2 ? BOSS_ENRAGE_SPEED : 1)
+      const speed = b.baseSpeed * (b.phase === 2 ? BOSS_ENRAGE_SPEED : 1) * b.speedMult
       this.moveCircle(b, Math.cos(b.angle) * speed * dt, Math.sin(b.angle) * speed * dt)
     }
 
@@ -3104,10 +3178,103 @@ export class Game {
       if (p.gore > 0) this.drawGore(p)
     }
     if (this.bubbleTimer > 0) this.drawRevealBubble()
+    for (const crate of this.crates) this.drawCratePrompt(crate)
     ctx.restore()
 
+    this.drawVisibility()
+    this.drawFlash()
     this.drawCrosshair()
     this.drawMinimap()
+    this.drawBanner()
+  }
+
+  /**
+   * Fog of war: everything past VISIBILITY_RADIUS of a player is dimmed on the
+   * main canvas. Drawn in screen space, after the world transform is popped.
+   */
+  private drawVisibility() {
+    if (this.state !== 'playing') return
+    // The reveal pan and the death cinematic frame the boss, not the players.
+    if (this.reveal === 'playing' || this.outro !== 'off') return
+    const ctx = this.ctx
+    const lit = this.alivePlayers.length ? this.alivePlayers : this.players
+    if (!lit.length) return
+
+    const dpr = window.devicePixelRatio || 1
+    const mask = this.maskCanvas(dpr)
+    const mctx = mask.getContext('2d')
+    if (!mctx) return
+    mctx.setTransform(dpr, 0, 0, dpr, 0, 0)
+    mctx.clearRect(0, 0, this.viewW, this.viewH)
+    mctx.fillStyle = `rgba(2,6,4,${DARKNESS})`
+    mctx.fillRect(0, 0, this.viewW, this.viewH)
+
+    // Punching the sight circles out of one mask keeps overlapping lights from
+    // stacking into a darker patch where two players stand together.
+    mctx.globalCompositeOperation = 'destination-out'
+    const r = VISIBILITY_RADIUS * this.zoom
+    for (const p of lit) {
+      const sx = (p.x - this.camera.x) * this.zoom
+      const sy = (p.y - this.camera.y) * this.zoom
+      const grad = mctx.createRadialGradient(sx, sy, r * 0.35, sx, sy, r)
+      grad.addColorStop(0, 'rgba(0,0,0,1)')
+      grad.addColorStop(1, 'rgba(0,0,0,0)')
+      mctx.fillStyle = grad
+      mctx.beginPath()
+      mctx.arc(sx, sy, r, 0, Math.PI * 2)
+      mctx.fill()
+    }
+    mctx.globalCompositeOperation = 'source-over'
+
+    ctx.drawImage(mask, 0, 0, this.viewW, this.viewH)
+  }
+
+  /** Scratch canvas for the fog mask, resized with the viewport. */
+  private maskCanvas(dpr: number): HTMLCanvasElement {
+    const mask = this.mask ?? document.createElement('canvas')
+    this.mask = mask
+    const w = Math.floor(this.viewW * dpr)
+    const h = Math.floor(this.viewH * dpr)
+    if (mask.width !== w || mask.height !== h) {
+      mask.width = w
+      mask.height = h
+    }
+    return mask
+  }
+
+  /** White-out that fires with an announcement banner. */
+  private drawFlash() {
+    if (this.flash <= 0) return
+    const ctx = this.ctx
+    ctx.save()
+    ctx.fillStyle = `rgba(186,230,253,${(this.flash / FLASH_TIME) * 0.55})`
+    ctx.fillRect(0, 0, this.viewW, this.viewH)
+    ctx.restore()
+  }
+
+  /** Centre-screen announcement, e.g. the Cryo-Stalker's phase 2 warning. */
+  private drawBanner() {
+    if (this.bannerTimer <= 0 || !this.banner) return
+    const ctx = this.ctx
+    const cx = this.viewW / 2
+    const cy = this.viewH / 2 - 40
+    const fade = Math.min(1, this.bannerTimer / 0.5)
+    ctx.save()
+    ctx.globalAlpha = fade
+    ctx.textAlign = 'center'
+    ctx.textBaseline = 'middle'
+    ctx.font = 'bold 38px ui-sans-serif, system-ui, sans-serif'
+    const w = Math.max(420, ctx.measureText(this.banner).width + 80)
+    ctx.fillStyle = 'rgba(8,20,28,0.82)'
+    ctx.fillRect(cx - w / 2, cy - 46, w, 92)
+    ctx.strokeStyle = '#7dd3fc'
+    ctx.lineWidth = 3
+    ctx.strokeRect(cx - w / 2, cy - 46, w, 92)
+    ctx.fillStyle = '#e0f2fe'
+    ctx.shadowColor = '#38bdf8'
+    ctx.shadowBlur = 18
+    ctx.fillText(this.banner, cx, cy)
+    ctx.restore()
   }
 
   /**
@@ -3952,6 +4119,37 @@ export class Game {
     ctx.restore()
   }
 
+  /**
+   * Floating control hint above a crate, drawn only while a player stands
+   * inside the interaction ring and gone the instant they step back out.
+   */
+  private drawCratePrompt(crate: Crate) {
+    if (crate.collected) return
+    const prompts = this.alivePlayers
+      .filter((p) => this.nearCrate(p, crate))
+      .map((p) => (p.id === 1 ? '[Hold E to Retrieve]' : '[Hold M to Retrieve]'))
+    if (!prompts.length) return
+
+    const ctx = this.ctx
+    ctx.save()
+    ctx.textAlign = 'center'
+    ctx.textBaseline = 'middle'
+    ctx.font = 'bold 16px ui-sans-serif, system-ui, sans-serif'
+    let y = crate.y - crate.r - 26
+    for (const text of prompts) {
+      const w = ctx.measureText(text).width + 18
+      ctx.fillStyle = 'rgba(8,16,10,0.78)'
+      ctx.fillRect(crate.x - w / 2, y - 13, w, 26)
+      ctx.strokeStyle = 'rgba(163,230,53,0.7)'
+      ctx.lineWidth = 2
+      ctx.strokeRect(crate.x - w / 2, y - 13, w, 26)
+      ctx.fillStyle = '#ecfccb'
+      ctx.fillText(text, crate.x, y)
+      y -= 30
+    }
+    ctx.restore()
+  }
+
   private drawSurvivor(s: Survivor) {
     const ctx = this.ctx
     ctx.beginPath()
@@ -4646,6 +4844,10 @@ export class Game {
     ctx.stroke()
   }
 
+  /**
+   * The radar is a schematic, not a view: it is drawn in screen space with no
+   * fog mask, so the full map geometry stays readable however dark the arena.
+   */
   private drawMinimap() {
     const ctx = this.ctx
     const m = this.map
