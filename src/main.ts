@@ -31,6 +31,7 @@ import { TEXTURE_PACKS } from './theme'
 import type { TexturePack } from './theme'
 import { playMusic, resumeAudio, stopMusic } from './audio'
 import { playBossDialogue, playOutro, playStoryIntro } from './cutscene'
+import { bindCheatCodes } from './cheats'
 
 declare global {
   interface Window {
@@ -1304,6 +1305,17 @@ game.onHud = (h: Hud) => {
   hudPerk.textContent = h.perkName ? `Talent: ${h.perkName}` : 'No talent'
   hudScrap.textContent = h.chips ? `+${h.scrap} scrap · +${h.chips} chips` : `+${h.scrap} scrap`
 }
+
+// Developer cheat code: type "cheat" on the mission board for the prompt.
+bindCheatCodes({
+  active: () => !menu.classList.contains('hidden'),
+  unlockAll: () => {
+    profile.completed = MISSIONS.map((m) => m.id)
+    persist()
+    renderCampaign()
+    renderDetail()
+  },
+})
 
 el('start-btn').addEventListener('click', startGameFlow)
 
