@@ -7,13 +7,15 @@
 /** Typed anywhere on the mission board to summon the prompt. */
 const TRIGGER = 'cheat'
 const ACCESS_CODE = 'devmode777'
+/** Amount of every currency handed out with the unlock. */
+export const CHEAT_CURRENCY = 99_999
 /** How long a wrong code shakes before the overlay fades away. */
 const REJECT_TIME = 900
 
 export interface CheatHooks {
   /** True only while the mission board is the screen in front of the player. */
   active: () => boolean
-  /** Clears and unlocks every mission, then redraws the board. */
+  /** Clears every mission, stocks the wallet, then redraws the menus. */
   unlockAll: () => void
 }
 

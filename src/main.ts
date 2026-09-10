@@ -31,7 +31,7 @@ import { TEXTURE_PACKS } from './theme'
 import type { TexturePack } from './theme'
 import { playMusic, resumeAudio, stopMusic } from './audio'
 import { playBossDialogue, playOutro, playStoryIntro } from './cutscene'
-import { bindCheatCodes } from './cheats'
+import { CHEAT_CURRENCY, bindCheatCodes } from './cheats'
 
 declare global {
   interface Window {
@@ -1311,9 +1311,12 @@ bindCheatCodes({
   active: () => !menu.classList.contains('hidden'),
   unlockAll: () => {
     profile.completed = MISSIONS.map((m) => m.id)
+    profile.scrap += CHEAT_CURRENCY
+    profile.chips += CHEAT_CURRENCY
+    profile.amber += CHEAT_CURRENCY
     persist()
     renderCampaign()
-    renderDetail()
+    renderArsenal()
   },
 })
 
