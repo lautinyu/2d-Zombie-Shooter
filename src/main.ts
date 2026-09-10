@@ -39,6 +39,7 @@ import type { TexturePack } from './theme'
 import { playMusic, resumeAudio, stopMusic } from './audio'
 import { playBossDialogue, playOutro, playStoryIntro } from './cutscene'
 import { CHEAT_CURRENCY, bindCheatCodes } from './cheats'
+import { mountArcade } from './arcade'
 
 declare global {
   interface Window {
@@ -172,6 +173,7 @@ app.innerHTML = `
         <button id="shop-btn" class="rounded-lg bg-yellow-500/15 px-6 py-2 text-sm font-bold text-yellow-300 ring-1 ring-yellow-400/40 hover:bg-yellow-500/25">Weapons Shop</button>
         <button id="locker-btn" class="rounded-lg bg-sky-500/15 px-6 py-2 text-sm font-bold text-sky-300 ring-1 ring-sky-400/40 hover:bg-sky-500/25">Locker</button>
         <button id="textures-btn" class="rounded-lg bg-violet-500/15 px-6 py-2 text-sm font-bold text-violet-300 ring-1 ring-violet-400/40 hover:bg-violet-500/25">Texture Pack</button>
+        <button id="arcade-btn" class="animate-pulse rounded-lg bg-rose-500/20 px-6 py-2 text-sm font-black uppercase tracking-widest text-rose-200 ring-2 ring-rose-400/70 shadow-[0_0_22px_rgba(244,63,94,0.5)] hover:bg-rose-500/35">🕹️ Play Arcade: Crimson Highway</button>
       </div>
       <div class="mt-4 flex items-center justify-center gap-2 text-xs">
         <span class="font-semibold uppercase tracking-wider text-slate-400">Players</span>
@@ -1007,6 +1009,22 @@ for (const slot of ARSENAL_TABS) {
     renderArsenal()
   })
 }
+
+// The arcade cabinet runs entirely on its own overlay loop; the campaign just
+// hands over the screen and picks up exactly where it left off.
+const arcade = mountArcade(() => {
+  show(menu, true)
+  playMusic('menu')
+})
+
+el('arcade-btn').addEventListener('click', () => {
+  resumeAudio()
+  stopMusic()
+  show(menu, false)
+  show(arsenalScreen, false)
+  show(characterScreen, false)
+  arcade.open()
+})
 
 el('shop-btn').addEventListener('click', () => openArsenal('shop'))
 el('locker-btn').addEventListener('click', () => openArsenal('locker'))
