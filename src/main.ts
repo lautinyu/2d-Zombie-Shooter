@@ -623,9 +623,7 @@ function launch(m: Mission) {
   if (m.type === 'boss') {
     show(menu, false)
     game.startMission(m, loadout, roster, true)
-    // The Leviathan has no briefing scene yet, so it cuts straight to the reveal.
-    if (m.boss === 'canopy-leviathan') game.resume()
-    else playBossDialogue(activeCharacter(), m.boss ?? 'hive-mother', () => game.resume())
+    playBossDialogue(activeCharacter(), m.boss ?? 'hive-mother', () => game.resume())
     return
   }
   game.startMission(m, loadout, roster)

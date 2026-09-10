@@ -20,6 +20,8 @@ interface Line {
   text: string
   /** 'system' lines are machine readouts, rendered in glowing yellow. */
   side: 'left' | 'right' | 'system'
+  /** Slams the screen red and wipes the NPC sprites as the line opens. */
+  flash?: boolean
 }
 
 /** Closing crawl after the Hive Mother falls. */
@@ -142,8 +144,47 @@ export function playStoryIntro(onDone: () => void) {
   skip.addEventListener('click', finish)
 }
 
+/** The Wardens' camp, cut short by the Leviathan's opening slam. */
+function leviathanIntroDialogue(id: CharacterId): Line[] {
+  const hero = characterById(id).name
+  return [
+    { speaker: hero, text: 'What is this place? Who are you people?', side: 'left' },
+    {
+      speaker: 'Elder Taelon',
+      text: 'Shh! The roots hear everything. We are the last of the Wardens. We thought the high leaves would protect us from the spreading rot, but it tracked our path...',
+      side: 'right',
+    },
+    {
+      speaker: 'Elder Taelon',
+      text: 'Break its glowing anchors, outsider! I will explain everything if we survive the eclipse!',
+      side: 'right',
+      flash: true,
+    },
+  ]
+}
+
+/** After the Leviathan falls: the Wardens' secret and the road to chapter 4. */
+function leviathanOutroDialogue(id: CharacterId): Line[] {
+  const hero = characterById(id).name
+  return [
+    { speaker: hero, text: "It's dead. Now talk. What was that thing hunting you for?", side: 'left' },
+    {
+      speaker: 'Elder Taelon',
+      text: "It wasn't hunting us for food... it was consuming our ancient bloodline to open the seal. My entire family... eaten. It sought the key to the iron gates beyond the mountains.",
+      side: 'right',
+    },
+    { speaker: hero, text: 'Where do I go next?', side: 'left' },
+    {
+      speaker: 'Elder Taelon',
+      text: "The monster was just a scout. The source of the infection lies deep within CHAPTER 4: THE SCORCHED RUSTLANDS\u2014the endless machine deserts where the old world's weapons went mad. Go east, past the dead sea...",
+      side: 'right',
+    },
+  ]
+}
+
 function bossDialogue(id: CharacterId, boss: BossKind): Line[] {
   const hero = characterById(id).name
+  if (boss === 'canopy-leviathan') return leviathanIntroDialogue(id)
   if (boss === 'runner-alpha') {
     return [
       {
@@ -386,11 +427,32 @@ function cryoOutroDialogue(id: CharacterId): Line[] {
  * that fades to black and hands back to the menu.
  */
 export function playOutro(id: CharacterId, boss: BossKind, onDone: () => void) {
+  // The Leviathan hands straight back to the chapter board after its last line.
+  if (boss === 'canopy-leviathan') {
+    runDialogue(id, leviathanOutroDialogue(id), true, onDone)
+    return
+  }
   const chapter2 = boss === 'cryo-stalker'
   const lines = chapter2 ? cryoOutroDialogue(id) : outroDialogue(id)
   runDialogue(id, lines, true, () =>
     playCredits(chapter2 ? 'chapter2' : 'chapter1', onDone)
   )
+}
+
+/** Red slam flash used when a cutscene is interrupted mid-sentence. */
+function flashDanger() {
+  const host = document.querySelector('#app')
+  if (!host) return
+  const flash = document.createElement('div')
+  flash.className = 'pointer-events-none absolute inset-0 z-50 bg-red-600'
+  host.appendChild(flash)
+  const anim = flash.animate(
+    [{ opacity: 0.85 }, { opacity: 0.25 }, { opacity: 0 }],
+    { duration: 700, easing: 'ease-out' }
+  )
+  anim.onfinish = () => flash.remove()
+  playSfx('explosion')
+  playSfx('boss-roar')
 }
 
 function playCredits(chapter: 'chapter1' | 'chapter2', onDone: () => void) {
@@ -462,6 +524,11 @@ function runDialogue(id: CharacterId, lines: Line[], overlay: boolean, onDone: (
 
   const type = () => {
     const line = lines[index]
+    if (line.flash) {
+      flashDanger()
+      // The camp and its guards are gone the moment the slam lands.
+      document.getElementById('cutscene-survivor-group')?.classList.add('hidden')
+    }
     speaker.textContent = line.speaker
     speaker.className = `text-sm font-black uppercase tracking-widest ${
       line.side === 'left'
