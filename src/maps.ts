@@ -25,11 +25,13 @@ export type MapId =
   | 'frozencore'
   | 'abandonedlab'
   | 'concourse'
+  | 'reactor'
   | 'canopy'
   | 'thicket'
   | 'valley'
   | 'marshlands'
   | 'infiltration'
+  | 'canopycrown'
 
 /** Ground texture painted under everything else. */
 export type FloorStyle = 'asphalt' | 'wood' | 'organic' | 'dirt' | 'ice' | 'snow' | 'jungle'
@@ -53,6 +55,8 @@ export interface GameMap {
   hives?: { x: number; y: number }[]
   /** Fixed supply crate drops for 'supply' missions. */
   crates?: { x: number; y: number }[]
+  /** Primeval Crystals feeding the Canopy Leviathan, one per arena corner. */
+  crystals?: { x: number; y: number }[]
   /** Traversable pits that slow anything wading through them. */
   mud?: Rect[]
   /** Forced player start, used by the linear extraction valley. */
@@ -688,6 +692,70 @@ const MARSHLANDS: GameMap = {
   ],
 }
 
+/** Chapter 2: the moss-choked reactor hall feeding the whole facility. */
+const REACTOR: GameMap = {
+  id: 'reactor',
+  name: 'The Overgrown Reactor',
+  width: 1900,
+  height: 1500,
+  color: '#22403f',
+  wallColor: '#8fbcb4',
+  wallEdge: '#3d605c',
+  floor: 'ice',
+  accent: '#a7f3d0',
+  extraction: { x: 1740, y: 1340 },
+  // A ring of coolant housings around the core, open enough to be swarmed in.
+  walls: [
+    ...border(1900, 1500),
+    ...partitions([
+      { x: 820, y: 660, w: 260, h: 180 },
+      { x: 420, y: 300, w: 260, h: 60 },
+      { x: 1220, y: 300, w: 260, h: 60 },
+      { x: 420, y: 1140, w: 260, h: 60 },
+      { x: 1220, y: 1140, w: 260, h: 60 },
+      { x: 300, y: 560, w: 60, h: 380 },
+      { x: 1540, y: 560, w: 60, h: 380 },
+      { x: 640, y: 460, w: 90, h: 90 },
+      { x: 1170, y: 460, w: 90, h: 90 },
+      { x: 640, y: 950, w: 90, h: 90 },
+      { x: 1170, y: 950, w: 90, h: 90 },
+    ]),
+  ],
+}
+
+/** Chapter 3: the crown of the canopy, arena of the Canopy Leviathan. */
+const CANOPY_CROWN: GameMap = {
+  id: 'canopycrown',
+  name: 'The Canopy Crown',
+  width: 2000,
+  height: 1700,
+  color: '#152618',
+  wallColor: '#3a5330',
+  wallEdge: '#1b2814',
+  floor: 'jungle',
+  accent: '#a3e635',
+  extraction: { x: 1840, y: 1540 },
+  crystals: [
+    { x: 300, y: 300 },
+    { x: 1700, y: 300 },
+    { x: 300, y: 1400 },
+    { x: 1700, y: 1400 },
+  ],
+  // A wide-open arena: only stumps break line of sight, so the flame zones
+  // always have somewhere to land.
+  walls: [
+    ...border(2000, 1700),
+    ...partitions([
+      { x: 520, y: 520, w: 110, h: 110 },
+      { x: 1370, y: 520, w: 110, h: 110 },
+      { x: 520, y: 1070, w: 110, h: 110 },
+      { x: 1370, y: 1070, w: 110, h: 110 },
+      { x: 940, y: 180, w: 120, h: 90 },
+      { x: 940, y: 1430, w: 120, h: 90 },
+    ]),
+  ],
+}
+
 /** Chapter 3: the tight ruin corridors under the canopy roots. */
 const INFILTRATION: GameMap = {
   id: 'infiltration',
@@ -739,11 +807,13 @@ export const MAPS: GameMap[] = [
   FROZEN_CORE,
   ABANDONED_LAB,
   CONCOURSE,
+  REACTOR,
   CANOPY,
   THICKET,
   VALLEY,
   MARSHLANDS,
   INFILTRATION,
+  CANOPY_CROWN,
 ]
 
 /** True when the point sits inside one of the map's mud pits. */

@@ -63,6 +63,7 @@ export type BossKind =
   | 'camo-stalker'
   | 'brood-matron'
   | 'cryo-stalker'
+  | 'canopy-leviathan'
 
 /** Path bosses; clearing two of them opens the Hive Mother finale. */
 export const PATH_BOSS_IDS = ['quarantine-boss', 'swarm-boss', 'evac-boss']
@@ -125,6 +126,8 @@ export interface Mission {
   hives?: number
   /** Supply crates to collect on 'supply' missions. */
   crates?: number
+  /** Wave density multiplier; >1 packs the map with more bodies at once. */
+  density?: number
 }
 
 export const MISSIONS: Mission[] = [
@@ -393,9 +396,26 @@ export const MISSIONS: Mission[] = [
       'The concourse links every wing of Project Horizon, and the whole facility is walking down it.',
     objective: 'Clear 34 infected and hold the transit concourse.',
     path: null,
-    unlocks: ['ch2-boss'],
+    unlocks: ['ch2-7'],
     payout: 1.7,
     rewardBase: 55,
+    chapter: 2,
+  },
+  {
+    id: 'ch2-7',
+    name: 'The Overgrown Reactor',
+    map: 'reactor',
+    type: 'hunt',
+    target: 46,
+    survivors: 0,
+    description:
+      'The reactor hall still has power, and the heat pulled every last thing in the facility into it.',
+    objective: 'Clear 46 infected out of the reactor hall. They come in packed.',
+    path: null,
+    unlocks: ['ch2-boss'],
+    payout: 1.9,
+    rewardBase: 65,
+    density: 1.7,
     chapter: 2,
   },
   {
@@ -495,9 +515,27 @@ export const MISSIONS: Mission[] = [
       'Root-choked temple corridors run under the canopy, and the brood nests in every one of them.',
     objective: 'Push through the ruins and clear 36 of the brood.',
     path: null,
-    unlocks: [],
+    unlocks: ['ch3-boss'],
     payout: 2.3,
     rewardBase: 105,
+    chapter: 3,
+  },
+  {
+    id: 'ch3-boss',
+    name: 'The Canopy Leviathan',
+    map: 'canopycrown',
+    type: 'boss',
+    target: 1,
+    survivors: 0,
+    description:
+      'The thing the whole jungle grew around is coiled in the crown, fed by four Primeval Crystals.',
+    objective:
+      'Shatter all 4 Primeval Crystals, then kill the Leviathan. Stay out of the marked ground.',
+    path: null,
+    unlocks: [],
+    payout: 2.6,
+    rewardBase: 140,
+    boss: 'canopy-leviathan',
     chapter: 3,
   },
 ]

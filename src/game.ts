@@ -123,6 +123,31 @@ interface Hive {
   spawnTimer: number
 }
 
+/** A Primeval Crystal channelling health into the Canopy Leviathan. */
+interface Crystal {
+  x: number
+  y: number
+  r: number
+  hp: number
+  maxHp: number
+  hurt: number
+  /** Drives the idle glow and the healing beam's shimmer. */
+  pulse: number
+  /** Seconds left of the visible beam fired on the last heal tick. */
+  beam: number
+}
+
+/** A telegraphed Leviathan slam zone: warns first, then burns. */
+interface FlameZone {
+  x: number
+  y: number
+  r: number
+  /** Seconds of red warning circle left before the flames erupt. */
+  warn: number
+  /** Seconds of burning left once the warning expires. */
+  burn: number
+}
+
 /** An air-dropped crate collected by standing on it on 'supply' missions. */
 interface Crate {
   x: number
@@ -618,6 +643,28 @@ const FLASH_TIME = 0.6
 const VISIBILITY_BASE_RADIUS = 620
 const VISIBILITY_RADIUS = VISIBILITY_BASE_RADIUS * 0.7
 const DARKNESS = 0.72
+/**
+ * The Canopy Leviathan: a huge, slow chapter 3 finale that cannot be killed
+ * while any of its four Primeval Crystals still feeds it.
+ */
+const LEVIATHAN_MAX_HP = 9000
+const LEVIATHAN_RADIUS = 78
+const LEVIATHAN_SPEED = 62
+const LEVIATHAN_CONTACT_DAMAGE = 26
+const CRYSTAL_RADIUS = 32
+const CRYSTAL_HP = 700
+/** Every live crystal beams 5% of the boss's pool back to it every 2s. */
+const CRYSTAL_HEAL_INTERVAL = 2
+const CRYSTAL_HEAL_FRACTION = 0.05
+const CRYSTAL_BEAM_TIME = 0.45
+/** Ground slam: three zones telegraphed for 1.5s, then burning ground. */
+const LEVIATHAN_SLAM_INTERVAL = 6
+const FLAME_ZONE_COUNT = 3
+const FLAME_ZONE_RADIUS = 135
+const FLAME_ZONE_SPREAD = 420
+const FLAME_WARNING_TIME = 1.5
+const FLAME_BURN_TIME = 2.6
+const FLAME_DPS = 34
 /** Brood Matron: a lighter Hive Mother that guards the skyline. */
 const MATRON_MAX_HP = 1400
 const MATRON_RADIUS = 50
@@ -633,6 +680,8 @@ const BOSS_REVEAL_LINES: Record<BossKind, string> = {
   'runner-alpha': "There she is... that's the Alpha. Watch the walls and keep moving!",
   'camo-stalker': "There it is... barely. Watch the floor for prints, it's already circling!",
   'cryo-stalker': "It's out of the pod — keep moving, that frost wave will pin you down!",
+  'canopy-leviathan':
+    'Break the four crystals first — it heals off them faster than we can shoot!',
 }
 
 export class Game {
@@ -698,6 +747,8 @@ export class Game {
   private generator: Generator | null = null
   private hives: Hive[] = []
   private crates: Crate[] = []
+  private crystals: Crystal[] = []
+  private flameZones: FlameZone[] = []
   /** Set once a player stands inside the jungle extraction hatch. */
   private raceEscaped = false
   /** Seconds left on a Hold the Line siege. */
@@ -923,6 +974,7 @@ export class Game {
     this.chaseTimer = 0
     this.acid = []
     this.blasts = []
+    this.flameZones = []
     this.holdTimer = mission.holdTime ?? 0
     this.mutation = null
     this.mutationTimer = MUTATION_INTERVAL
@@ -1008,6 +1060,21 @@ export class Game {
       this.boss = this.makeBoss(mission.boss ?? 'hive-mother')
     }
 
+    // The Leviathan's life sources sit at the hand-placed arena corners.
+    this.crystals =
+      mission.boss === 'canopy-leviathan'
+        ? (this.map.crystals ?? []).map((c) => ({
+            x: c.x,
+            y: c.y,
+            r: CRYSTAL_RADIUS,
+            hp: CRYSTAL_HP,
+            maxHp: CRYSTAL_HP,
+            hurt: 0,
+            pulse: Math.random() * 6,
+            beam: 0,
+          }))
+        : []
+
     // The generator sits dead centre; the camp is built around defending it.
     this.generator =
       mission.type === 'generator'
@@ -1066,6 +1133,13 @@ export class Game {
         r: CRYO_STALKER_RADIUS,
         hp: CRYO_STALKER_MAX_HP,
         speed: CRYO_STALKER_SPEED,
+      },
+      'canopy-leviathan': {
+        name: 'The Canopy Leviathan',
+        title: 'Primeval Colossus',
+        r: LEVIATHAN_RADIUS,
+        hp: LEVIATHAN_MAX_HP,
+        speed: LEVIATHAN_SPEED,
       },
     }
     const s = stats[kind]
@@ -1275,6 +1349,7 @@ export class Game {
     this.updatePickups(dt)
     this.updateAcid(dt)
     this.updateBlasts(dt)
+    this.updateFlameZones(dt)
     this.updateHives(dt)
     this.updateCrates(dt)
     this.updateRace()
@@ -1464,6 +1539,14 @@ export class Game {
   /** Progress counter shown on the HUD for the three jungle mission modes. */
   private jungleObjective(): HudObjective | null {
     const type = this.mission?.type
+    const crystals = this.map.crystals?.length
+    if (this.mission?.boss === 'canopy-leviathan' && crystals) {
+      return {
+        label: 'Primeval Crystals shattered',
+        done: crystals - this.crystals.length,
+        total: crystals,
+      }
+    }
     if (type === 'overgrowth') {
       return {
         label: 'Spore Hives destroyed',
@@ -2218,6 +2301,17 @@ export class Game {
         if (!b.pierce) dead = true
       }
       if (!dead) {
+        for (let c = this.crystals.length - 1; c >= 0; c--) {
+          const crystal = this.crystals[c]
+          if (segmentDistance(crystal.x, crystal.y, px, py, b.x, b.y) >= crystal.r) continue
+          crystal.hp -= b.damage
+          crystal.hurt = 0.14
+          if (crystal.hp <= 0) this.burstCrystal(c)
+          if (!b.pierce) dead = true
+          break
+        }
+      }
+      if (!dead) {
         for (let h = this.hives.length - 1; h >= 0; h--) {
           const hive = this.hives[h]
           if (segmentDistance(hive.x, hive.y, px, py, b.x, b.y) >= hive.r) continue
@@ -2322,6 +2416,10 @@ export class Game {
     }
     if (b.kind === 'cryo-stalker') {
       this.updateCryoStalker(b, dt, prey)
+      return
+    }
+    if (b.kind === 'canopy-leviathan') {
+      this.updateCanopyLeviathan(b, dt, prey)
       return
     }
 
@@ -2523,6 +2621,116 @@ export class Game {
       prey.hurtCooldown = 0.3
       prey.safeTimer = 0
       b.attackCooldown = 1
+    }
+  }
+
+  /**
+   * The Leviathan lumbers after its prey and slams the ground every six
+   * seconds. While a Primeval Crystal still stands it drinks back 5% of its
+   * pool every two seconds and cannot be dropped below a sliver of health.
+   */
+  private updateCanopyLeviathan(b: Boss, dt: number, prey: Player | null) {
+    this.updateCrystals(b, dt)
+    if (this.crystals.length) b.hp = Math.max(b.hp, 1)
+
+    if (prey) {
+      const speed = b.baseSpeed * (b.phase === 2 ? BOSS_ENRAGE_SPEED : 1) * b.speedMult
+      this.moveCircle(b, Math.cos(b.angle) * speed * dt, Math.sin(b.angle) * speed * dt)
+    }
+
+    b.broodTimer -= dt
+    if (b.broodTimer <= 0) {
+      b.broodTimer = LEVIATHAN_SLAM_INTERVAL * (b.phase === 2 ? 0.75 : 1)
+      this.slamFlameZones(b, prey)
+    }
+
+    if (prey && b.attackCooldown === 0 && Math.hypot(prey.x - b.x, prey.y - b.y) < b.r + prey.r) {
+      prey.hp -= LEVIATHAN_CONTACT_DAMAGE
+      prey.hurtCooldown = 0.3
+      prey.safeTimer = 0
+      b.attackCooldown = 1
+    }
+  }
+
+  /** Each surviving crystal beams a slice of the boss's pool back to it. */
+  private updateCrystals(b: Boss, dt: number) {
+    for (const c of this.crystals) {
+      c.pulse += dt
+      c.hurt = Math.max(0, c.hurt - dt)
+      c.beam = Math.max(0, c.beam - dt)
+    }
+    if (!this.crystals.length) return
+    b.ringTimer -= dt
+    if (b.ringTimer > 0) return
+    b.ringTimer = CRYSTAL_HEAL_INTERVAL
+    for (const c of this.crystals) {
+      c.beam = CRYSTAL_BEAM_TIME
+      b.hp = Math.min(b.maxHp, b.hp + b.maxHp * CRYSTAL_HEAL_FRACTION)
+    }
+    playSfx('sting')
+  }
+
+  /** A crystal shatters, cutting one of the boss's lifelines. */
+  private burstCrystal(index: number) {
+    const c = this.crystals[index]
+    this.crystals.splice(index, 1)
+    this.shake = Math.max(this.shake, 0.7)
+    playSfx('explosion')
+    for (let i = 0; i < 22; i++) {
+      const a = Math.random() * Math.PI * 2
+      const speed = 100 + Math.random() * 300
+      this.gibs.push({
+        x: c.x,
+        y: c.y,
+        vx: Math.cos(a) * speed,
+        vy: Math.sin(a) * speed,
+        r: 3 + Math.random() * 6,
+        life: 1,
+        decay: 0.6 + Math.random() * 0.6,
+        color: Math.random() < 0.5 ? '#67e8f9' : '#a3e635',
+      })
+    }
+    if (!this.crystals.length) this.announce('⚠️ PRIMEVAL CRYSTALS DOWN! THE LEVIATHAN IS VULNERABLE')
+  }
+
+  /** Marks three patches of ground around the prey for the coming eruption. */
+  private slamFlameZones(b: Boss, prey: Player | null) {
+    const focus = prey ?? { x: b.x, y: b.y }
+    for (let i = 0; i < FLAME_ZONE_COUNT; i++) {
+      const a = Math.random() * Math.PI * 2
+      const d = Math.random() * FLAME_ZONE_SPREAD
+      this.flameZones.push({
+        x: clamp(focus.x + Math.cos(a) * d, FLAME_ZONE_RADIUS, this.map.width - FLAME_ZONE_RADIUS),
+        y: clamp(focus.y + Math.sin(a) * d, FLAME_ZONE_RADIUS, this.map.height - FLAME_ZONE_RADIUS),
+        r: FLAME_ZONE_RADIUS,
+        warn: FLAME_WARNING_TIME,
+        burn: FLAME_BURN_TIME,
+      })
+    }
+    this.shake = Math.max(this.shake, 0.7)
+    playSfx('boss-dash')
+  }
+
+  /** Warning circles count down, then cook anything standing in them. */
+  private updateFlameZones(dt: number) {
+    for (let i = this.flameZones.length - 1; i >= 0; i--) {
+      const z = this.flameZones[i]
+      if (z.warn > 0) {
+        z.warn -= dt
+        if (z.warn <= 0) playSfx('explosion')
+        continue
+      }
+      z.burn -= dt
+      if (z.burn <= 0) {
+        this.flameZones.splice(i, 1)
+        continue
+      }
+      for (const p of this.alivePlayers) {
+        if (Math.hypot(p.x - z.x, p.y - z.y) > z.r + p.r) continue
+        p.hp -= FLAME_DPS * dt
+        p.hurtCooldown = 0.25
+        p.safeTimer = 0
+      }
     }
   }
 
@@ -2905,7 +3113,9 @@ export class Game {
                 : supply
                   ? 10
                   : Math.min(14, Math.max(4, Math.ceil(mission.target / 3)))
-    if (this.enemies.length >= maxAlive) return
+    // Dense stages keep noticeably more bodies on the floor at once.
+    const density = mission.density ?? 1
+    if (this.enemies.length >= Math.round(maxAlive * density)) return
     if (!protect && !boss && !hold && !jungle) {
       const remaining = mission.target - this.kills
       if (this.spawned - this.kills >= remaining + 4) return
@@ -2926,6 +3136,7 @@ export class Game {
               : jungle
                 ? 1.2
                 : 0.9
+    this.spawnTimer /= density
 
     const spot = this.spawnPoint()
     if (!spot) return
@@ -3141,6 +3352,8 @@ export class Game {
     for (const pool of this.acid) this.drawAcid(pool)
     for (const crate of this.crates) this.drawCrate(crate)
     for (const hive of this.hives) this.drawHive(hive)
+    for (const zone of this.flameZones) this.drawFlameZone(zone)
+    for (const crystal of this.crystals) this.drawCrystal(crystal)
     if (this.generator) this.drawGenerator(this.generator)
     for (const blast of this.blasts) this.drawBlast(blast)
 
@@ -3657,6 +3870,10 @@ export class Game {
       this.drawCryoStalker(b)
       return
     }
+    if (b.kind === 'canopy-leviathan') {
+      this.drawCanopyLeviathan(b)
+      return
+    }
     const ctx = this.ctx
     const enhanced = this.textures === 'enhanced'
     const lift = enhanced ? UNIT_LIFT * 3 : 0
@@ -4081,6 +4298,180 @@ export class Game {
     ctx.fillRect(-hive.r, -hive.r * 1.55, hive.r * 2, 9)
     ctx.fillStyle = pct > 0.5 ? '#a3e635' : pct > 0.25 ? '#facc15' : '#ef4444'
     ctx.fillRect(-hive.r, -hive.r * 1.55, hive.r * 2 * pct, 9)
+    ctx.restore()
+  }
+
+  /**
+   * The Leviathan: a mossy colossus ringed with tendrils, glowing while its
+   * crystals still feed it and dulled once they are all down.
+   */
+  private drawCanopyLeviathan(b: Boss) {
+    const ctx = this.ctx
+    const enhanced = this.textures === 'enhanced'
+    const lift = enhanced ? UNIT_LIFT * 3.4 : 0
+    const breathe = Math.sin(b.wobble * 2.2) * 0.05
+    const fed = this.crystals.length > 0
+
+    ctx.save()
+    ctx.fillStyle = 'rgba(0,0,0,0.5)'
+    ctx.beginPath()
+    ctx.ellipse(b.x, b.y + b.r * 0.4, b.r * 1.1, b.r * 0.5, 0, 0, Math.PI * 2)
+    ctx.fill()
+    ctx.restore()
+
+    ctx.save()
+    ctx.translate(b.x, b.y - lift)
+
+    const aura = ctx.createRadialGradient(0, 0, b.r * 0.5, 0, 0, b.r * 1.9)
+    aura.addColorStop(0, fed ? 'rgba(74,222,128,0.4)' : 'rgba(120,53,15,0.35)')
+    aura.addColorStop(1, 'rgba(74,222,128,0)')
+    ctx.fillStyle = aura
+    ctx.beginPath()
+    ctx.arc(0, 0, b.r * 1.9, 0, Math.PI * 2)
+    ctx.fill()
+
+    ctx.rotate(b.angle)
+
+    // Tendrils lashing out of the shell.
+    ctx.strokeStyle = fed ? '#4d7c0f' : '#3f2d12'
+    ctx.lineWidth = 9
+    ctx.lineCap = 'round'
+    for (let i = -3; i <= 3; i++) {
+      const a = Math.PI + i * 0.32
+      const wave = Math.sin(b.wobble * 4 + i) * 0.22
+      ctx.beginPath()
+      ctx.moveTo(Math.cos(a) * b.r * 0.8, Math.sin(a) * b.r * 0.8)
+      ctx.lineTo(Math.cos(a + wave) * b.r * 1.7, Math.sin(a + wave) * b.r * 1.7)
+      ctx.stroke()
+    }
+
+    const body = b.phase === 2 ? '#3f6212' : '#4d7c0f'
+    const size = b.r * (1.7 + breathe)
+    if (enhanced) {
+      ctx.fillStyle = '#1a2e05'
+      ctx.fillRect(-size / 2, -size / 2, size, size)
+      ctx.fillStyle = body
+      ctx.fillRect(-size / 2, -size / 2, size, size * 0.76)
+      ctx.fillStyle = 'rgba(190,242,100,0.22)'
+      ctx.fillRect(-size / 2, -size / 2, size, size * 0.16)
+      ctx.strokeStyle = '#1a2e05'
+      ctx.lineWidth = 4
+      ctx.strokeRect(-size / 2, -size / 2, size, size)
+    } else {
+      ctx.beginPath()
+      ctx.ellipse(0, 0, b.r * (1 + breathe), b.r * 0.88, 0, 0, Math.PI * 2)
+      ctx.fillStyle = body
+      ctx.fill()
+      ctx.strokeStyle = '#1a2e05'
+      ctx.lineWidth = 5
+      ctx.stroke()
+    }
+
+    // Amber plates down the back and the pair of eyes up front.
+    ctx.fillStyle = fed ? 'rgba(163,230,53,0.85)' : 'rgba(120,113,108,0.8)'
+    for (let i = -1; i <= 1; i++) {
+      ctx.beginPath()
+      ctx.arc(-b.r * 0.35, i * b.r * 0.42, b.r * 0.18, 0, Math.PI * 2)
+      ctx.fill()
+    }
+    ctx.fillStyle = b.hurt > 0 ? '#fecaca' : fed ? '#bef264' : '#f97316'
+    for (const side of [-1, 1]) {
+      ctx.beginPath()
+      ctx.arc(b.r * 0.6, side * b.r * 0.3, b.r * 0.16, 0, Math.PI * 2)
+      ctx.fill()
+    }
+    ctx.restore()
+  }
+
+  /** A Primeval Crystal, with its health bar and its beam to the boss. */
+  private drawCrystal(c: Crystal) {
+    const ctx = this.ctx
+    const beat = 1 + Math.sin(c.pulse * 2.6) * 0.08
+    const pct = Math.max(0, c.hp / c.maxHp)
+
+    if (c.beam > 0 && this.boss) {
+      ctx.save()
+      ctx.globalAlpha = 0.35 + (c.beam / CRYSTAL_BEAM_TIME) * 0.45
+      ctx.strokeStyle = '#86efac'
+      ctx.lineWidth = 7
+      ctx.lineCap = 'round'
+      ctx.beginPath()
+      ctx.moveTo(c.x, c.y)
+      ctx.lineTo(this.boss.x, this.boss.y)
+      ctx.stroke()
+      ctx.strokeStyle = '#ecfccb'
+      ctx.lineWidth = 2
+      ctx.stroke()
+      ctx.restore()
+    }
+
+    ctx.save()
+    this.drawGroundShadow(c.x, c.y, c.r * 0.8)
+    ctx.translate(c.x, c.y)
+    ctx.rotate(Math.sin(c.pulse) * 0.08)
+    ctx.beginPath()
+    ctx.moveTo(0, -c.r * 1.5 * beat)
+    ctx.lineTo(c.r * 0.72, -c.r * 0.2)
+    ctx.lineTo(0, c.r * 0.95)
+    ctx.lineTo(-c.r * 0.72, -c.r * 0.2)
+    ctx.closePath()
+    ctx.fillStyle = c.hurt > 0 ? '#fecaca' : '#34d399'
+    ctx.fill()
+    ctx.strokeStyle = '#064e3b'
+    ctx.lineWidth = 4
+    ctx.stroke()
+    ctx.fillStyle = 'rgba(236,253,245,0.55)'
+    ctx.beginPath()
+    ctx.moveTo(0, -c.r * 1.3 * beat)
+    ctx.lineTo(c.r * 0.26, -c.r * 0.2)
+    ctx.lineTo(0, c.r * 0.6)
+    ctx.closePath()
+    ctx.fill()
+    ctx.restore()
+
+    ctx.save()
+    ctx.fillStyle = 'rgba(0,0,0,0.6)'
+    ctx.fillRect(c.x - c.r, c.y - c.r * 2.1, c.r * 2, 8)
+    ctx.fillStyle = pct > 0.5 ? '#4ade80' : pct > 0.25 ? '#facc15' : '#ef4444'
+    ctx.fillRect(c.x - c.r, c.y - c.r * 2.1, c.r * 2 * pct, 8)
+    ctx.restore()
+  }
+
+  /** A slam zone: a red warning ring first, then burning ground. */
+  private drawFlameZone(z: FlameZone) {
+    const ctx = this.ctx
+    ctx.save()
+    if (z.warn > 0) {
+      const grow = 1 - z.warn / FLAME_WARNING_TIME
+      ctx.fillStyle = 'rgba(220,38,38,0.22)'
+      ctx.beginPath()
+      ctx.arc(z.x, z.y, z.r, 0, Math.PI * 2)
+      ctx.fill()
+      ctx.strokeStyle = 'rgba(248,113,113,0.9)'
+      ctx.lineWidth = 4
+      ctx.stroke()
+      ctx.strokeStyle = 'rgba(254,202,202,0.85)'
+      ctx.lineWidth = 3
+      ctx.beginPath()
+      ctx.arc(z.x, z.y, z.r * grow, 0, Math.PI * 2)
+      ctx.stroke()
+      ctx.restore()
+      return
+    }
+    const heat = Math.max(0, z.burn / FLAME_BURN_TIME)
+    ctx.globalAlpha = 0.55 + heat * 0.35
+    ctx.fillStyle = '#ea580c'
+    ctx.beginPath()
+    ctx.arc(z.x, z.y, z.r, 0, Math.PI * 2)
+    ctx.fill()
+    ctx.fillStyle = 'rgba(250,204,21,0.7)'
+    for (let i = 0; i < 9; i++) {
+      const a = (i / 9) * Math.PI * 2 + z.burn * 3
+      const d = z.r * (0.25 + Math.random() * 0.6)
+      ctx.beginPath()
+      ctx.arc(z.x + Math.cos(a) * d, z.y + Math.sin(a) * d, 6 + Math.random() * 10, 0, Math.PI * 2)
+      ctx.fill()
+    }
     ctx.restore()
   }
 
