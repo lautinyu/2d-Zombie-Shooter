@@ -40,6 +40,7 @@ import { playMusic, resumeAudio, stopMusic } from './audio'
 import { playBossDialogue, playOutro, playStoryIntro } from './cutscene'
 import { CHEAT_CURRENCY, bindCheatCodes } from './cheats'
 import { mountArcade } from './arcade'
+import { mountVoidBlast } from './voidblast'
 
 declare global {
   interface Window {
@@ -174,6 +175,7 @@ app.innerHTML = `
         <button id="locker-btn" class="rounded-lg bg-sky-500/15 px-6 py-2 text-sm font-bold text-sky-300 ring-1 ring-sky-400/40 hover:bg-sky-500/25">Locker</button>
         <button id="textures-btn" class="rounded-lg bg-violet-500/15 px-6 py-2 text-sm font-bold text-violet-300 ring-1 ring-violet-400/40 hover:bg-violet-500/25">Texture Pack</button>
         <button id="arcade-btn" class="animate-pulse rounded-lg bg-rose-500/20 px-6 py-2 text-sm font-black uppercase tracking-widest text-rose-200 ring-2 ring-rose-400/70 shadow-[0_0_22px_rgba(244,63,94,0.5)] hover:bg-rose-500/35">🕹️ Play Arcade: Crimson Highway</button>
+        <button id="voidblast-btn" class="animate-pulse rounded-lg bg-fuchsia-500/20 px-6 py-2 text-sm font-black uppercase tracking-widest text-fuchsia-200 ring-2 ring-fuchsia-400/70 shadow-[0_0_22px_rgba(217,70,239,0.5)] hover:bg-fuchsia-500/35">🕹️ Play Arcade: Void Blast</button>
       </div>
       <div class="mt-4 flex items-center justify-center gap-2 text-xs">
         <span class="font-semibold uppercase tracking-wider text-slate-400">Players</span>
@@ -1017,14 +1019,22 @@ const arcade = mountArcade(() => {
   playMusic('menu')
 })
 
-el('arcade-btn').addEventListener('click', () => {
+const voidBlast = mountVoidBlast(() => {
+  show(menu, true)
+  playMusic('menu')
+})
+
+function enterCabinet(openCabinet: () => void) {
   resumeAudio()
   stopMusic()
   show(menu, false)
   show(arsenalScreen, false)
   show(characterScreen, false)
-  arcade.open()
-})
+  openCabinet()
+}
+
+el('arcade-btn').addEventListener('click', () => enterCabinet(() => arcade.open()))
+el('voidblast-btn').addEventListener('click', () => enterCabinet(() => voidBlast.open()))
 
 el('shop-btn').addEventListener('click', () => openArsenal('shop'))
 el('locker-btn').addEventListener('click', () => openArsenal('locker'))
