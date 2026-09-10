@@ -11,12 +11,13 @@ export type MissionType =
   | 'overgrowth'
   | 'supply'
   | 'race'
+  | 'rail'
 
 /**
  * Chapter 1 is the outbreak, chapter 2 the arctic Project Horizon arc and
  * chapter 3 the equatorial jungle the plague actually came from.
  */
-export type ChapterId = 1 | 2 | 3
+export type ChapterId = 1 | 2 | 3 | 4
 
 export interface ChapterInfo {
   id: ChapterId
@@ -42,6 +43,12 @@ export const CHAPTERS: ChapterInfo[] = [
     blurb:
       'The equatorial nesting grounds. Moss-caked infected carry double health, and the ruins pay in Ancient Amber.',
   },
+  {
+    id: 4,
+    title: 'Chapter 4: The Scorched Rustlands',
+    blurb:
+      'The machine deserts east of the dead sea. Scavengers hit harder than anything south of them, and salvage pays in Rust Cores.',
+  },
 ]
 
 /** Chapter 2 mutations are hardened by the cold. */
@@ -52,10 +59,16 @@ export const CH2_DAMAGE_SCALE = 1.3
 export const CH3_HP_SCALE = 2
 export const CH3_DAMAGE_SCALE = 1.3
 
+/** Rustland scavengers are the toughest thing walking. */
+export const CH4_HP_SCALE = 2.5
+export const CH4_DAMAGE_SCALE = 1.5
+
 /** Chapter 2 opens once the Hive Mother is dead. */
 export const CHAPTER_2_GATE = 'finale'
 /** Chapter 3 opens once the Cryo-Stalker closes chapter 2. */
 export const CHAPTER_3_GATE = 'ch2-boss'
+/** Chapter 4 opens once the Canopy Leviathan closes chapter 3. */
+export const CHAPTER_4_GATE = 'ch3-boss'
 export type PathId = 'quarantine' | 'swarm' | 'evac'
 export type BossKind =
   | 'hive-mother'
@@ -128,6 +141,8 @@ export interface Mission {
   crates?: number
   /** Wave density multiplier; >1 packs the map with more bodies at once. */
   density?: number
+  /** Armoured truck hit points on the 'rail' convoy mission. */
+  truckHp?: number
 }
 
 export const MISSIONS: Mission[] = [
@@ -538,6 +553,144 @@ export const MISSIONS: Mission[] = [
     boss: 'canopy-leviathan',
     chapter: 3,
   },
+
+  // Chapter 4 — The Scorched Rustlands, east of the dead sea
+  {
+    id: 'ch4-1',
+    name: 'The Ashfall Crossing',
+    map: 'rustflats',
+    type: 'hunt',
+    target: 30,
+    survivors: 0,
+    description:
+      'The first miles of the machine desert. Ash falls like snow and the scavengers move through it in packs.',
+    objective: 'Clear 30 Rustland scavengers and hold the crossing.',
+    path: null,
+    unlocks: ['ch4-2'],
+    payout: 1.4,
+    rewardBase: 70,
+    chapter: 4,
+  },
+  {
+    id: 'ch4-2',
+    name: 'Fueling the Rig',
+    map: 'rusthighway',
+    type: 'rail',
+    target: 0,
+    survivors: 0,
+    description:
+      'The convoy rig only has fuel for one run down the highway. You ride in the bed and shoot everything that comes at it.',
+    objective:
+      'Ride the rig to the depot. You cannot move — aim 360° from the bed. Truck Integrity or your health hitting 0 ends the run.',
+    path: null,
+    unlocks: ['ch4-3'],
+    payout: 2.2,
+    rewardBase: 110,
+    truckHp: 1400,
+    chapter: 4,
+  },
+  {
+    id: 'ch4-3',
+    name: 'The Boneyard Signal',
+    map: 'boneyard',
+    type: 'hive',
+    target: 34,
+    survivors: 0,
+    description:
+      'Something in the machine graveyard is broadcasting, and every crawler in the desert answers it.',
+    objective: 'Clear 34 of the brood out of the boneyard.',
+    path: null,
+    unlocks: ['ch4-4'],
+    payout: 1.7,
+    rewardBase: 80,
+    chapter: 4,
+  },
+  {
+    id: 'ch4-4',
+    name: 'Rust Refinery Siege',
+    map: 'refinery',
+    type: 'generator',
+    target: 34,
+    survivors: 0,
+    description:
+      'The refinery pump is the only working fuel line left out here. Everything wants it dead.',
+    objective: 'Break the siege — 34 kills. If the pump falls, the convoy never leaves.',
+    path: null,
+    unlocks: ['ch4-5'],
+    payout: 1.9,
+    rewardBase: 90,
+    generatorHp: 1500,
+    chapter: 4,
+  },
+  {
+    id: 'ch4-5',
+    name: 'Sandstorm Blackout',
+    map: 'rustflats',
+    type: 'hold',
+    target: 0,
+    survivors: 0,
+    description:
+      'The storm front hits and takes the light with it. Nothing to do but stand back to back.',
+    objective: 'Survive 2 minutes in the blackout. The waves never stop.',
+    path: null,
+    unlocks: ['ch4-6'],
+    payout: 2,
+    rewardBase: 95,
+    holdTime: 120,
+    density: 1.3,
+    chapter: 4,
+  },
+  {
+    id: 'ch4-6',
+    name: 'Salvage the Munitions',
+    map: 'boneyard',
+    type: 'supply',
+    target: 0,
+    survivors: 0,
+    description:
+      'Four munition pallets are buried somewhere in the boneyard, and the convoy is out of rounds.',
+    objective:
+      'Find all 4 munition pallets and hold E (player 2: M) beside each one to haul it out.',
+    path: null,
+    unlocks: ['ch4-7'],
+    payout: 2.1,
+    rewardBase: 100,
+    crates: 4,
+    chapter: 4,
+  },
+  {
+    id: 'ch4-7',
+    name: 'The Dead Sea Crossing',
+    map: 'dunes',
+    type: 'race',
+    target: 0,
+    survivors: 0,
+    description:
+      'The salt flats are the fastest way east and the worst place in the world to be caught standing still.',
+    objective: 'Cross the flats to the far extraction point. The salt sinks slow you down.',
+    path: null,
+    unlocks: ['ch4-8'],
+    payout: 2.3,
+    rewardBase: 115,
+    chapter: 4,
+  },
+  {
+    id: 'ch4-8',
+    name: 'The Iron Gate Approach',
+    map: 'ironhold',
+    type: 'hunt',
+    target: 50,
+    survivors: 0,
+    description:
+      'The iron gates the Warden spoke of are in sight, and everything the Rustlands has left is stacked in front of them.',
+    objective: 'Clear 50 scavengers off the approach. They come in packed.',
+    path: null,
+    unlocks: [],
+    payout: 2.6,
+    rewardBase: 130,
+    density: 1.8,
+    chapter: 4,
+  },
 ]
 
 export function missionById(id: string): Mission {
@@ -580,9 +733,15 @@ export function chapterThreeUnlocked(completed: string[]): boolean {
   return completed.includes(CHAPTER_3_GATE)
 }
 
+/** Chapter 4 travel opens the moment the Canopy Leviathan is dead. */
+export function chapterFourUnlocked(completed: string[]): boolean {
+  return completed.includes(CHAPTER_4_GATE)
+}
+
 export function chapterUnlocked(chapter: ChapterId, completed: string[]): boolean {
   if (chapter === 2) return chapterTwoUnlocked(completed)
   if (chapter === 3) return chapterThreeUnlocked(completed)
+  if (chapter === 4) return chapterFourUnlocked(completed)
   return true
 }
 

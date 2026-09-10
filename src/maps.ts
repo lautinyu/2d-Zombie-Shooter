@@ -32,9 +32,23 @@ export type MapId =
   | 'marshlands'
   | 'infiltration'
   | 'canopycrown'
+  | 'rustflats'
+  | 'rusthighway'
+  | 'boneyard'
+  | 'refinery'
+  | 'dunes'
+  | 'ironhold'
 
 /** Ground texture painted under everything else. */
-export type FloorStyle = 'asphalt' | 'wood' | 'organic' | 'dirt' | 'ice' | 'snow' | 'jungle'
+export type FloorStyle =
+  | 'asphalt'
+  | 'wood'
+  | 'organic'
+  | 'dirt'
+  | 'ice'
+  | 'snow'
+  | 'jungle'
+  | 'sand'
 
 export interface GameMap {
   id: MapId
@@ -791,6 +805,179 @@ const INFILTRATION: GameMap = {
   ],
 }
 
+/** Chapter 4: the ash-blown crossing at the edge of the machine deserts. */
+const RUSTFLATS: GameMap = {
+  id: 'rustflats',
+  name: 'The Ashfall Crossing',
+  width: 1900,
+  height: 1500,
+  color: '#3a2b1c',
+  wallColor: '#8a6a45',
+  wallEdge: '#4a3520',
+  floor: 'sand',
+  accent: '#fbbf24',
+  extraction: { x: 1720, y: 1340 },
+  walls: [
+    ...border(1900, 1500),
+    ...partitions([
+      { x: 300, y: 320, w: 300, h: 70 },
+      { x: 1240, y: 300, w: 320, h: 70 },
+      { x: 260, y: 900, w: 70, h: 340 },
+      { x: 1520, y: 860, w: 70, h: 360 },
+      { x: 740, y: 640, w: 380, h: 80 },
+      { x: 620, y: 1120, w: 260, h: 70 },
+      { x: 1080, y: 1080, w: 240, h: 70 },
+    ]),
+  ],
+}
+
+/**
+ * Chapter 4: the linear stretch of dead highway the rig rolls down. The
+ * middle lane is deliberately wall-free so the truck's path is never blocked.
+ */
+const RUST_HIGHWAY: GameMap = {
+  id: 'rusthighway',
+  name: 'The Scorched Highway',
+  width: 4400,
+  height: 1200,
+  color: '#332a22',
+  wallColor: '#7d6244',
+  wallEdge: '#413021',
+  floor: 'sand',
+  accent: '#f59e0b',
+  spawn: { x: 300, y: 600 },
+  extraction: { x: 4120, y: 600 },
+  walls: [
+    ...border(4400, 1200),
+    // Roadside wrecks and gantries, all clear of the y 380–820 driving lane.
+    ...partitions([
+      { x: 640, y: 150, w: 300, h: 120 },
+      { x: 1500, y: 170, w: 260, h: 110 },
+      { x: 2400, y: 140, w: 320, h: 130 },
+      { x: 3300, y: 165, w: 280, h: 115 },
+      { x: 900, y: 930, w: 300, h: 120 },
+      { x: 1900, y: 950, w: 280, h: 110 },
+      { x: 2850, y: 920, w: 320, h: 130 },
+      { x: 3700, y: 940, w: 260, h: 110 },
+    ]),
+  ],
+}
+
+/** Chapter 4: a machine graveyard of stacked hulls and cargo skeletons. */
+const BONEYARD: GameMap = {
+  id: 'boneyard',
+  name: 'The Rust Boneyard',
+  width: 2200,
+  height: 1700,
+  color: '#33291f',
+  wallColor: '#8b6b48',
+  wallEdge: '#463525',
+  floor: 'sand',
+  accent: '#fcd34d',
+  extraction: { x: 2020, y: 1520 },
+  crates: [
+    { x: 320, y: 340 },
+    { x: 1880, y: 380 },
+    { x: 360, y: 1380 },
+    { x: 1840, y: 1340 },
+  ],
+  walls: [
+    ...border(2200, 1700),
+    ...partitions([
+      { x: 340, y: 560, w: 420, h: 80 },
+      { x: 1120, y: 380, w: 80, h: 380 },
+      { x: 1440, y: 700, w: 380, h: 80 },
+      { x: 400, y: 940, w: 80, h: 360 },
+      { x: 760, y: 1160, w: 400, h: 80 },
+      { x: 1560, y: 1080, w: 80, h: 340 },
+      { x: 860, y: 300, w: 130, h: 130 },
+      { x: 1760, y: 940, w: 130, h: 130 },
+    ]),
+  ],
+}
+
+/** Chapter 4: the refinery yard built around a single fuel pump. */
+const REFINERY: GameMap = {
+  id: 'refinery',
+  name: 'The Rust Refinery',
+  width: 1800,
+  height: 1500,
+  color: '#382a20',
+  wallColor: '#96703f',
+  wallEdge: '#4b3722',
+  floor: 'sand',
+  accent: '#fbbf24',
+  extraction: { x: 1620, y: 1340 },
+  walls: [
+    ...border(1800, 1500),
+    ...partitions([
+      { x: 320, y: 320, w: 260, h: 70 },
+      { x: 1220, y: 320, w: 260, h: 70 },
+      { x: 320, y: 1110, w: 260, h: 70 },
+      { x: 1220, y: 1110, w: 260, h: 70 },
+      { x: 280, y: 620, w: 70, h: 260 },
+      { x: 1450, y: 620, w: 70, h: 260 },
+    ]),
+  ],
+}
+
+/** Chapter 4: the salt flats of the dead sea, run end to end. */
+const DUNES: GameMap = {
+  id: 'dunes',
+  name: 'The Dead Sea Flats',
+  width: 3000,
+  height: 1200,
+  color: '#3d3324',
+  wallColor: '#8d7146',
+  wallEdge: '#4a3823',
+  floor: 'sand',
+  accent: '#fde68a',
+  spawn: { x: 260, y: 600 },
+  extraction: { x: 2780, y: 600 },
+  walls: [
+    ...border(3000, 1200),
+    ...partitions([
+      { x: 620, y: 200, w: 90, h: 340 },
+      { x: 980, y: 660, w: 90, h: 340 },
+      { x: 1420, y: 180, w: 90, h: 380 },
+      { x: 1860, y: 640, w: 90, h: 360 },
+      { x: 2300, y: 220, w: 90, h: 340 },
+    ]),
+  ],
+  // Sinkholes of powdered salt drag anything wading through them.
+  mud: [
+    { x: 820, y: 420, w: 280, h: 260 },
+    { x: 1600, y: 380, w: 300, h: 300 },
+    { x: 2320, y: 620, w: 260, h: 280 },
+  ],
+}
+
+/** Chapter 4: the approach to the iron gates, packed wall to wall. */
+const IRONHOLD: GameMap = {
+  id: 'ironhold',
+  name: 'The Iron Gate Approach',
+  width: 2000,
+  height: 1600,
+  color: '#2f2721',
+  wallColor: '#7f6b52',
+  wallEdge: '#3f342a',
+  floor: 'sand',
+  accent: '#f97316',
+  extraction: { x: 1820, y: 1440 },
+  walls: [
+    ...border(2000, 1600),
+    ...partitions([
+      { x: 880, y: 700, w: 240, h: 200 },
+      { x: 420, y: 380, w: 240, h: 70 },
+      { x: 1340, y: 380, w: 240, h: 70 },
+      { x: 420, y: 1150, w: 240, h: 70 },
+      { x: 1340, y: 1150, w: 240, h: 70 },
+      { x: 300, y: 700, w: 70, h: 240 },
+      { x: 1630, y: 700, w: 70, h: 240 },
+    ]),
+  ],
+}
+
 export const MAPS: GameMap[] = [
   STREETS,
   WAREHOUSE,
@@ -814,6 +1001,12 @@ export const MAPS: GameMap[] = [
   MARSHLANDS,
   INFILTRATION,
   CANOPY_CROWN,
+  RUSTFLATS,
+  RUST_HIGHWAY,
+  BONEYARD,
+  REFINERY,
+  DUNES,
+  IRONHOLD,
 ]
 
 /** True when the point sits inside one of the map's mud pits. */

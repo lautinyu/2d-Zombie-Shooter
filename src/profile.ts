@@ -13,6 +13,8 @@ export interface Profile {
   chips: number
   /** Chapter 3 currency, awarded only for clearing jungle stages. */
   amber: number
+  /** Chapter 4 currency, salvaged only in the Rustlands. */
+  cores: number
   owned: WeaponId[]
   /** Heavy firearm carried in the primary slot. */
   primary: WeaponId
@@ -33,6 +35,7 @@ const DEFAULT_PROFILE: Profile = {
   scrap: 0,
   chips: 0,
   amber: 0,
+  cores: 0,
   owned: [...STARTER_WEAPONS],
   primary: 'old-rifle',
   secondary: 'm9-sidearm',
@@ -86,6 +89,8 @@ export function loadProfile(): Profile {
       chips: typeof record.chips === 'number' && record.chips >= 0 ? Math.floor(record.chips) : 0,
       // Saves written before chapter 3 simply have no amber yet.
       amber: typeof record.amber === 'number' && record.amber >= 0 ? Math.floor(record.amber) : 0,
+      // Saves written before chapter 4 simply have no cores yet.
+      cores: typeof record.cores === 'number' && record.cores >= 0 ? Math.floor(record.cores) : 0,
       owned,
       primary: pick('primary', record.primary),
       secondary: pick('secondary', record.secondary),
@@ -141,4 +146,10 @@ export function missionChipReward(mission: RewardMission): number {
 export function missionAmberReward(mission: RewardMission): number {
   const base = (mission.rewardBase ?? 20) + mission.target
   return Math.round((base * mission.payout) / 6)
+}
+
+/** Completion bonus in Rust Cores for a chapter 4 mission. */
+export function missionCoreReward(mission: RewardMission): number {
+  const base = (mission.rewardBase ?? 20) + mission.target
+  return Math.round((base * mission.payout) / 7)
 }

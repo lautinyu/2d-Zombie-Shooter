@@ -3,7 +3,14 @@ import type { MeleeProfile, Weapon } from './weapons'
 import { weaponById } from './weapons'
 import type { Character } from './characters'
 import { characterById } from './characters'
-import { CH2_DAMAGE_SCALE, CH2_HP_SCALE, CH3_DAMAGE_SCALE, CH3_HP_SCALE } from './missions'
+import {
+  CH2_DAMAGE_SCALE,
+  CH2_HP_SCALE,
+  CH3_DAMAGE_SCALE,
+  CH3_HP_SCALE,
+  CH4_DAMAGE_SCALE,
+  CH4_HP_SCALE,
+} from './missions'
 import { CHIPS_PER_KILL, SCRAP_PER_BUG, SCRAP_PER_KILL } from './profile'
 import { CRYO_SLOW, CRYO_SLOW_TIME, MAX_POISON_STACKS } from './weapons'
 import { playMusic, playSfx, playShot } from './audio'
@@ -176,6 +183,26 @@ interface Blast {
   r: number
   life: number
   maxLife: number
+}
+
+/**
+ * The armoured rig ridden on the chapter 4 rail mission. It drives itself
+ * down the highway and carries its own integrity pool, separate from the
+ * players sitting in its bed.
+ */
+interface Truck {
+  x: number
+  y: number
+  /** Half-extents of the chassis. */
+  hw: number
+  hh: number
+  hp: number
+  maxHp: number
+  /** Brief flash after taking a hit. */
+  hurt: number
+  speed: number
+  /** Wheel rotation, for the rolling animation. */
+  wheel: number
 }
 
 /** Whatever an enemy is currently walking at. */
@@ -412,6 +439,14 @@ export interface HudGenerator {
   maxHp: number
 }
 
+/** TRUCK INTEGRITY bar shown across the top of the rail mission HUD. */
+export interface HudTruck {
+  hp: number
+  maxHp: number
+  /** 0→100 of the highway covered so far. */
+  progress: number
+}
+
 /** Chapter 3 objective counters: hives felled, crates hauled, ground covered. */
 export interface HudObjective {
   label: string
@@ -441,6 +476,7 @@ export interface Hud {
   boss: HudBoss | null
   hold: HudHold | null
   generator: HudGenerator | null
+  truck: HudTruck | null
   /** Chapter 3 progress counter, or null outside the jungle missions. */
   jungle: HudObjective | null
   /** Frozen Data Chips banked so far this mission. */
@@ -460,7 +496,7 @@ export interface Hud {
   isProtect: boolean
 }
 
-export type DeathCause = 'wounds' | 'infection' | 'survivor' | 'generator'
+export type DeathCause = 'wounds' | 'infection' | 'survivor' | 'generator' | 'truck'
 
 const PLAYER_RADIUS = 16
 const PLAYER_BASE_SPEED = 260
@@ -669,6 +705,26 @@ const FLAME_ZONE_SPREAD = 420
 const FLAME_WARNING_TIME = 1.5
 const FLAME_BURN_TIME = 2.6
 const FLAME_DPS = 34
+/**
+ * Chapter 4 rail convoy. The rig rolls at a fixed pace, the players are
+ * bolted into its bed and every equipped weapon cycles 1.5x faster.
+ */
+const TRUCK_HALF_W = 96
+const TRUCK_HALF_H = 46
+const TRUCK_SPEED = 155
+const RAIL_FIRE_RATE = 1.5
+/** Seats in the bed, relative to the chassis centre. */
+const TRUCK_SEATS = [
+  { x: -38, y: -20 },
+  { x: -38, y: 20 },
+]
+/** Damage a scavenger or machine does when it slams into the chassis. */
+const RAIL_RAM_DAMAGE = 30
+/** Ranged crawlers hold this far back and spit into the bed instead. */
+const RAIL_SPIT_RANGE = 620
+const RAIL_SPIT_HOLD = 300
+const RAIL_SPIT_INTERVAL = 2.4
+
 /** Brood Matron: a lighter Hive Mother that guards the skyline. */
 const MATRON_MAX_HP = 1400
 const MATRON_RADIUS = 50
@@ -749,6 +805,7 @@ export class Game {
   /** Offscreen buffer the fog-of-war mask is composited on. */
   private mask: HTMLCanvasElement | null = null
   private generator: Generator | null = null
+  private truck: Truck | null = null
   private hives: Hive[] = []
   private crates: Crate[] = []
   private crystals: Crystal[] = []
@@ -1092,6 +1149,23 @@ export class Game {
           }
         : null
 
+    // The rig starts at the mouth of the highway and drives itself east.
+    this.truck =
+      mission.type === 'rail'
+        ? {
+            x: this.map.spawn?.x ?? TRUCK_HALF_W + 60,
+            y: this.map.spawn?.y ?? this.map.height / 2,
+            hw: TRUCK_HALF_W,
+            hh: TRUCK_HALF_H,
+            hp: mission.truckHp ?? 1400,
+            maxHp: mission.truckHp ?? 1400,
+            hurt: 0,
+            speed: TRUCK_SPEED,
+            wheel: 0,
+          }
+        : null
+    this.seatPlayers()
+
     playMusic(mission.type === 'boss' ? 'boss' : 'battle')
     this.setState('playing')
     this.start()
@@ -1280,6 +1354,13 @@ export class Game {
       generator: this.generator
         ? { hp: Math.max(0, Math.round(this.generator.hp)), maxHp: this.generator.maxHp }
         : null,
+      truck: this.truck
+        ? {
+            hp: Math.max(0, Math.round(this.truck.hp)),
+            maxHp: this.truck.maxHp,
+            progress: Math.round(this.railProgress * 100),
+          }
+        : null,
       jungle: this.jungleObjective(),
       chips: this.chipsEarned,
       boss: this.boss
@@ -1341,6 +1422,7 @@ export class Game {
       this.updatePlayer(p, dt)
       this.updateWeapon(p, dt)
     }
+    this.updateTruck(dt)
     this.updateBullets(dt)
     this.updateBoss(dt)
     this.updateVenom(dt)
@@ -1364,6 +1446,66 @@ export class Game {
     this.updateCamera()
     this.updateAmbience(dt)
     this.checkOutcome()
+  }
+
+  /** True while the players are mounted in the rail mission's truck bed. */
+  private get railMode(): boolean {
+    return this.mission?.type === 'rail' && this.truck !== null
+  }
+
+  /**
+   * Drives the rig down the highway, carries its passengers with it and
+   * settles anything that rams the chassis into the Truck Integrity pool.
+   */
+  private updateTruck(dt: number) {
+    const t = this.truck
+    if (!t) return
+    t.hurt = Math.max(0, t.hurt - dt)
+    t.wheel += dt * t.speed * 0.06
+    t.x = Math.min(t.x + t.speed * dt, this.map.extraction.x)
+    this.seatPlayers()
+
+    for (let i = this.enemies.length - 1; i >= 0; i--) {
+      const z = this.enemies[i]
+      // Ranged crawlers never touch the chassis: their venom is what hurts.
+      if (z.kind === 'bug') continue
+      if (!this.hitsTruck(z.x, z.y, z.r)) continue
+      t.hp -= RAIL_RAM_DAMAGE * this.damageScale
+      t.hurt = 0.25
+      this.shake = Math.max(this.shake, 0.5)
+      playSfx('explosion')
+      this.killEnemy(i)
+    }
+  }
+
+  /** Bolts every player into their seat in the bed. */
+  private seatPlayers() {
+    const t = this.truck
+    if (!t) return
+    this.players.forEach((p, i) => {
+      const seat = TRUCK_SEATS[i] ?? TRUCK_SEATS[0]
+      p.x = t.x + seat.x
+      p.y = t.y + seat.y
+      p.vx = 0
+      p.vy = 0
+    })
+  }
+
+  private hitsTruck(x: number, y: number, r: number): boolean {
+    const t = this.truck
+    if (!t) return false
+    const nx = clamp(x, t.x - t.hw, t.x + t.hw)
+    const ny = clamp(y, t.y - t.hh, t.y + t.hh)
+    return (x - nx) ** 2 + (y - ny) ** 2 < r * r
+  }
+
+  /** 0→1 of the highway the convoy has covered. */
+  private get railProgress(): number {
+    const t = this.truck
+    const start = this.map.spawn
+    if (!t || !start) return 0
+    const span = this.map.extraction.x - start.x || 1
+    return clamp((t.x - start.x) / span, 0, 1)
   }
 
   /** Lifts the pre-fight freeze; boss arenas cut straight to the reveal. */
@@ -1526,16 +1668,18 @@ export class Game {
     }
   }
 
-  /** Arctic infected carry 50% more health; jungle infected carry double. */
+  /** Arctic infected carry 50% more health; jungle and desert ones more. */
   private get hpScale(): number {
     const chapter = this.mission?.chapter
+    if (chapter === 4) return CH4_HP_SCALE
     if (chapter === 3) return CH3_HP_SCALE
     return chapter === 2 ? CH2_HP_SCALE : 1
   }
 
-  /** ...and both hit 30% harder than their chapter 1 kin. */
+  /** ...and all of them hit harder than their chapter 1 kin. */
   private get damageScale(): number {
     const chapter = this.mission?.chapter
+    if (chapter === 4) return CH4_DAMAGE_SCALE
     if (chapter === 3) return CH3_DAMAGE_SCALE
     return chapter === 2 ? CH2_DAMAGE_SCALE : 1
   }
@@ -1563,6 +1707,13 @@ export class Game {
         label: 'Supply crates recovered',
         done: this.cratesCollected,
         total: this.crates.length,
+      }
+    }
+    if (type === 'rail') {
+      return {
+        label: 'Convoy distance',
+        done: Math.round(this.railProgress * 100),
+        total: 100,
       }
     }
     if (type === 'race') {
@@ -1637,6 +1788,22 @@ export class Game {
       }
     } else if (mission.type === 'race') {
       if (this.raceEscaped) {
+        this.finish('won')
+        return
+      }
+    } else if (mission.type === 'rail') {
+      const t = this.truck
+      // Either pool emptying ends the run on the spot.
+      if (t && t.hp <= 0) {
+        this.deathCause = 'truck'
+        this.finish('lost')
+        return
+      }
+      if (this.players.some((p) => p.down)) {
+        this.finish('lost')
+        return
+      }
+      if (t && t.x >= this.map.extraction.x - 2) {
         this.finish('won')
         return
       }
@@ -1887,27 +2054,7 @@ export class Game {
     const k = keysPressed
     p.abilityCooldown = Math.max(0, p.abilityCooldown - dt)
     p.abilityActive = Math.max(0, p.abilityActive - dt)
-    const solo = this.players.length === 1
-    // Velocity is derived only from the movement flags — k.shooting is never
-    // read here, so firing cannot stop or slow a run.
-    let dx = 0
-    let dy = 0
-    if (p.id === 1) {
-      if (k.w || (solo && k.up)) dy -= 1
-      if (k.s || (solo && k.down)) dy += 1
-      if (k.a || (solo && k.left)) dx -= 1
-      if (k.d || (solo && k.right)) dx += 1
-    } else {
-      if (k.up) dy -= 1
-      if (k.down) dy += 1
-      if (k.left) dx -= 1
-      if (k.right) dx += 1
-    }
-    if (dx || dy) {
-      const len = Math.hypot(dx, dy)
-      dx /= len
-      dy /= len
-    }
+    const move = this.moveVector(p)
     const boosted = p.character.id === 'army-retiree' && p.abilityActive > 0
     p.chill = Math.max(0, p.chill - dt)
     const step =
@@ -1916,18 +2063,33 @@ export class Game {
       (p.chill > 0 ? CHILL_SLOW : 1) *
       (inMud(this.map, p.x, p.y) ? MUD_SLOW : 1) *
       dt
-    p.vx = dx * step
-    p.vy = dy * step
-    this.moveCircle(p, p.vx, p.vy)
-    this.checkRunAndGun(p, k.shooting)
+    // Mounted in the truck bed the direction keys do not move anything: the
+    // rig drives itself and the whole stage is aim and trigger.
+    const locked = this.railMode
+    if (!locked) {
+      p.vx = move.x * step
+      p.vy = move.y * step
+      this.moveCircle(p, p.vx, p.vy)
+      this.checkRunAndGun(p, k.shooting)
+    } else {
+      p.vx = 0
+      p.vy = 0
+    }
+
+    // Locked in the bed, a held direction snaps the muzzle straight onto that
+    // heading — instant 360° tracking from the truck centre.
+    const steered = locked && (move.x !== 0 || move.y !== 0)
+    if (steered) p.angle = Math.atan2(move.y, move.x)
 
     if (p.auto) {
       const mark = this.nearestEnemyTo(p, 1200)
-      if (mark) p.angle = Math.atan2(mark.y - p.y, mark.x - p.x)
+      if (mark && !steered) p.angle = Math.atan2(mark.y - p.y, mark.x - p.x)
       // Hold fire unless the target is close and not behind a building.
       const inRange = mark && Math.hypot(mark.x - p.x, mark.y - p.y) < P2_AUTO_FIRE_RANGE
       p.shooting = Boolean(inRange && mark && this.hasLineOfSight(p, mark))
       if (p.mag === 0) this.startReload(p)
+    } else if (steered) {
+      p.shooting = keysPressed.shooting
     } else {
       this.mouseWorld.x = this.mouseScreen.x / this.zoom + this.camera.x
       this.mouseWorld.y = this.mouseScreen.y / this.zoom + this.camera.y
@@ -1965,10 +2127,36 @@ export class Game {
   }
 
   private movementRequested(p: Player): boolean {
+    const v = this.moveVector(p)
+    return v.x !== 0 || v.y !== 0
+  }
+
+  /**
+   * Normalised direction the player's own keys are asking for. Drives movement
+   * everywhere except the rail mission, where it steers the weapon instead.
+   */
+  private moveVector(p: Player): { x: number; y: number } {
     const k = keysPressed
-    if (p.id === 2) return k.up || k.down || k.left || k.right
     const solo = this.players.length === 1
-    return k.w || k.a || k.s || k.d || (solo && (k.up || k.down || k.left || k.right))
+    let dx = 0
+    let dy = 0
+    if (p.id === 1) {
+      if (k.w || (solo && k.up)) dy -= 1
+      if (k.s || (solo && k.down)) dy += 1
+      if (k.a || (solo && k.left)) dx -= 1
+      if (k.d || (solo && k.right)) dx += 1
+    } else {
+      if (k.up) dy -= 1
+      if (k.down) dy += 1
+      if (k.left) dx -= 1
+      if (k.right) dx += 1
+    }
+    if (dx || dy) {
+      const len = Math.hypot(dx, dy)
+      dx /= len
+      dy /= len
+    }
+    return { x: dx, y: dy }
   }
 
   private hasLineOfSight(from: { x: number; y: number }, to: { x: number; y: number }): boolean {
@@ -2086,20 +2274,25 @@ export class Game {
       p.charge = 0
       p.queuedShot = false
       this.fire(p)
-      p.fireTimer = p.weapon.fireInterval
+      p.fireTimer = this.fireInterval(p)
       return
     }
     p.charge = 0
     if ((p.shooting || p.queuedShot) && p.fireTimer === 0) {
       if (p.mag > 0) {
         this.fire(p)
-        p.fireTimer = p.weapon.fireInterval
+        p.fireTimer = this.fireInterval(p)
         p.queuedShot = false
       } else {
         p.queuedShot = false
         this.startReload(p)
       }
     }
+  }
+
+  /** Rail convoy weapons cycle 1.5x faster, for the arcade cadence. */
+  private fireInterval(p: Player): number {
+    return this.railMode ? p.weapon.fireInterval / RAIL_FIRE_RATE : p.weapon.fireInterval
   }
 
   private fire(p: Player) {
@@ -3006,6 +3199,16 @@ export class Game {
       const wob = Math.sin(z.wobble * 4) * 0.25
       z.retreat = Math.max(0, z.retreat - dt)
 
+      // Convoy crawlers are the ranged threat: they hold off the chassis and
+      // spit into the bed, so their damage lands on the players, not the rig.
+      if (this.railMode && z.kind === 'bug') {
+        if (d < RAIL_SPIT_HOLD) z.retreat = 0.5
+        if (z.attackCooldown === 0 && d < RAIL_SPIT_RANGE) {
+          this.spitAtBed(z, target)
+          z.attackCooldown = RAIL_SPIT_INTERVAL
+        }
+      }
+
       // The horde always knows roughly where its prey is; only a stealth
       // character's low profile can keep it shambling instead of charging.
       const sight = z.vision * (target.player ? target.player.character.aggroMultiplier : 1)
@@ -3072,6 +3275,20 @@ export class Game {
     }
   }
 
+  /** A convoy crawler lobs a venom bolt at whoever is riding in the bed. */
+  private spitAtBed(z: Enemy, target: { x: number; y: number }) {
+    const a = Math.atan2(target.y - z.y, target.x - z.x)
+    this.venom.push({
+      x: z.x + Math.cos(a) * (z.r + 6),
+      y: z.y + Math.sin(a) * (z.r + 6),
+      vx: Math.cos(a) * VENOM_SPEED,
+      vy: Math.sin(a) * VENOM_SPEED,
+      r: 7,
+      life: VENOM_LIFE,
+    })
+    playSfx('sting')
+  }
+
   private updatePickups(dt: number) {
     for (let i = this.ammoBoxes.length - 1; i >= 0; i--) {
       const a = this.ammoBoxes[i]
@@ -3109,7 +3326,8 @@ export class Game {
     const supply = mission.type === 'supply'
     // The valley gauntlet thickens the further down it the players push.
     const race = mission.type === 'race'
-    const jungle = overgrowth || supply || race
+    const rail = mission.type === 'rail'
+    const jungle = overgrowth || supply || race || rail
     const raceRamp = race ? this.raceProgress : 0
     // Hold the Line ramps from a trickle to a wall of bodies by the last second.
     const holdProgress = hold && mission.holdTime ? 1 - this.holdTimer / mission.holdTime : 0
@@ -3122,7 +3340,9 @@ export class Game {
           ? Math.round(6 * ramp)
           : generator
             ? 12
-            : race
+            : rail
+              ? 14
+              : race
               ? Math.round(8 + raceRamp * 10)
               : overgrowth
                 ? 8
@@ -3147,7 +3367,9 @@ export class Game {
           ? Math.max(0.35, 1.6 / ramp)
           : generator
             ? 0.8
-            : race
+            : rail
+              ? 0.65
+              : race
               ? Math.max(0.35, 1.4 - raceRamp)
               : jungle
                 ? 1.2
@@ -3343,7 +3565,8 @@ export class Game {
     this.drawFloor()
     this.drawMapLabel()
     for (const pit of m.mud ?? []) this.drawMud(pit)
-    if (this.mission?.type === 'protect' || this.mission?.type === 'race') this.drawExtraction()
+    const mode = this.mission?.type
+    if (mode === 'protect' || mode === 'race' || mode === 'rail') this.drawExtraction()
 
     for (const w of m.walls) {
       if (this.textures === 'enhanced') this.drawStructure3D(w)
@@ -3371,6 +3594,7 @@ export class Game {
     for (const zone of this.flameZones) this.drawFlameZone(zone)
     for (const crystal of this.crystals) this.drawCrystal(crystal)
     if (this.generator) this.drawGenerator(this.generator)
+    if (this.truck) this.drawTruck(this.truck)
     for (const blast of this.blasts) this.drawBlast(blast)
 
     for (const e of this.enemies) {
@@ -3607,6 +3831,26 @@ export class Game {
           ctx.lineTo(x, y + Math.sin(x / 130 + y / 210) * 26)
         }
         ctx.stroke()
+      }
+    } else if (m.floor === 'sand') {
+      // Wind-combed dust ridges over buried rusted plating.
+      ctx.strokeStyle = 'rgba(253,230,138,0.06)'
+      ctx.lineWidth = 5
+      for (let y = Math.floor(y0 / 130) * 130; y < y1; y += 130) {
+        ctx.beginPath()
+        for (let x = x0; x < x1; x += 50) {
+          ctx.lineTo(x, y + Math.sin(x / 220 + y / 130) * 22)
+        }
+        ctx.stroke()
+      }
+      ctx.fillStyle = 'rgba(120,72,32,0.14)'
+      for (let y = Math.floor(y0 / 90) * 90; y < y1; y += 90) {
+        for (let x = Math.floor(x0 / 90) * 90 + ((y / 90) % 2 ? 45 : 0); x < x1; x += 90) {
+          const r = ((x * 23 + y * 13) % 9) + 5
+          ctx.beginPath()
+          ctx.ellipse(x + 26, y + 32, r, r * 0.55, 0, 0, Math.PI * 2)
+          ctx.fill()
+        }
       }
     } else if (m.floor === 'organic') {
       ctx.strokeStyle = 'rgba(224,163,255,0.12)'
@@ -4871,6 +5115,57 @@ export class Game {
     ctx.moveTo(-z.r * 0.6, -z.r * 0.2)
     ctx.quadraticCurveTo(0, z.r * 0.35 + Math.sin(z.wobble * 3) * 2, z.r * 0.7, -z.r * 0.35)
     ctx.stroke()
+    ctx.restore()
+  }
+
+  /**
+   * The armoured rig: a plated chassis rolling east, with an open bed the
+   * players are strapped into and a roll cage over the cab.
+   */
+  private drawTruck(t: Truck) {
+    const ctx = this.ctx
+    ctx.save()
+    ctx.translate(t.x, t.y)
+
+    // Wheels, rolling as the rig covers ground.
+    ctx.fillStyle = '#111827'
+    for (const wx of [-t.hw + 26, 4, t.hw - 26]) {
+      for (const wy of [-t.hh - 6, t.hh + 6]) {
+        ctx.save()
+        ctx.translate(wx, wy)
+        ctx.fillRect(-16, -9, 32, 18)
+        ctx.strokeStyle = '#6b7280'
+        ctx.lineWidth = 2
+        ctx.beginPath()
+        ctx.moveTo(-10, Math.sin(t.wheel) * 7)
+        ctx.lineTo(10, -Math.sin(t.wheel) * 7)
+        ctx.stroke()
+        ctx.restore()
+      }
+    }
+
+    ctx.fillStyle = t.hurt > 0 ? '#fca5a5' : '#5b6470'
+    ctx.fillRect(-t.hw, -t.hh, t.hw * 2, t.hh * 2)
+    ctx.strokeStyle = '#1f2937'
+    ctx.lineWidth = 4
+    ctx.strokeRect(-t.hw, -t.hh, t.hw * 2, t.hh * 2)
+
+    // Open bed at the rear, cab and windscreen at the front.
+    ctx.fillStyle = '#3f4652'
+    ctx.fillRect(-t.hw + 10, -t.hh + 10, t.hw, t.hh * 2 - 20)
+    ctx.fillStyle = '#7b8592'
+    ctx.fillRect(t.hw - 58, -t.hh + 8, 46, t.hh * 2 - 16)
+    ctx.fillStyle = '#bae6fd'
+    ctx.fillRect(t.hw - 20, -t.hh + 14, 10, t.hh * 2 - 28)
+
+    // Ram plate up front and hazard stripes along the bed rails.
+    ctx.fillStyle = '#9ca3af'
+    ctx.fillRect(t.hw, -t.hh + 6, 12, t.hh * 2 - 12)
+    ctx.fillStyle = '#f59e0b'
+    for (let x = -t.hw + 12; x < 4; x += 22) {
+      ctx.fillRect(x, -t.hh + 2, 12, 6)
+      ctx.fillRect(x, t.hh - 8, 12, 6)
+    }
     ctx.restore()
   }
 

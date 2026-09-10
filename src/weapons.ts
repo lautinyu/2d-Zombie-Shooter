@@ -12,6 +12,8 @@ export type WeaponId =
   | 'cryo-launcher'
   | 'venom-spitter'
   | 'jungle-machete'
+  | 'scrap-autocannon'
+  | 'rebar-cleaver'
 
 /** Primaries are the heavy firearms; secondaries are sidearms and melee. */
 export type WeaponSlot = 'primary' | 'secondary'
@@ -42,9 +44,9 @@ export type PerkId =
 
 /**
  * Chapter 1 gear is bought with scrap, arctic tech with Frozen Data Chips and
- * the jungle relics with Ancient Amber.
+ * the jungle relics with Ancient Amber and Rustland salvage with Rust Cores.
  */
-export type Currency = 'scrap' | 'chips' | 'amber'
+export type Currency = 'scrap' | 'chips' | 'amber' | 'cores'
 
 /** Radar chart axes, scored 1-5. */
 export interface RadarStats {
@@ -430,6 +432,57 @@ export const WEAPONS: Weapon[] = [
     infiniteAmmo: true,
     melee: { reach: 74, arc: (120 * Math.PI) / 180, knockback: 52, stunChance: 0, stunTime: 0 },
   },
+  {
+    id: 'scrap-autocannon',
+    name: 'Scrap Autocannon',
+    slot: 'primary',
+    price: 28,
+    currency: 'cores',
+    color: '#f59e0b',
+    perk: 'armor-piercing',
+    perkName: 'Rustland Slugs',
+    perkDescription:
+      'Bored-out scrap slugs punch clean through a line of scavengers instead of stopping on the first one.',
+    description: 'Salvaged deck gun rebuilt for the truck bed: heavy, loud, piercing.',
+    radar: { damage: 4, fireRate: 4, reloadSpeed: 2, ammoCapacity: 4, range: 4 },
+    damage: 38,
+    fireInterval: 0.11,
+    reloadTime: 1.9,
+    magSize: 45,
+    reserveStart: 270,
+    bulletSpeed: 1500,
+    bulletLife: 0.85,
+    pellets: 1,
+    spread: 0.05,
+    tracerWidth: 4,
+    piercing: true,
+  },
+  {
+    id: 'rebar-cleaver',
+    name: 'Rebar Cleaver',
+    slot: 'secondary',
+    price: 20,
+    currency: 'cores',
+    color: '#b45309',
+    perk: 'heavy-cleave',
+    perkName: 'Scrap Cleave',
+    perkDescription:
+      'A slab of welded rebar: a 140° arc that shatters plating and staggers whatever survives it.',
+    description: 'Rustland melee slab. No ammo, enormous arc, bone-breaking knockback.',
+    radar: { damage: 5, fireRate: 2, reloadSpeed: 5, ammoCapacity: 5, range: 2 },
+    damage: 82,
+    fireInterval: 0.46,
+    reloadTime: 0,
+    magSize: 1,
+    reserveStart: 0,
+    bulletSpeed: 0,
+    bulletLife: 0,
+    pellets: 0,
+    spread: 0,
+    tracerWidth: 0,
+    infiniteAmmo: true,
+    melee: { reach: 80, arc: (140 * Math.PI) / 180, knockback: 64, stunChance: 0.2, stunTime: 0.8 },
+  },
 ]
 
 export const STARTER_WEAPONS: WeaponId[] = ['old-rifle', 'rusty-pistol', 'm9-sidearm']
@@ -442,6 +495,11 @@ export function chapterTwoWeapons(): Weapon[] {
 /** Jungle relics live on the Ancient Tech tab and cost Ancient Amber. */
 export function chapterThreeWeapons(): Weapon[] {
   return WEAPONS.filter((w) => w.currency === 'amber')
+}
+
+/** Rustland salvage lives on the Rust Tech tab and costs Rust Cores. */
+export function chapterFourWeapons(): Weapon[] {
+  return WEAPONS.filter((w) => w.currency === 'cores')
 }
 
 export function weaponsInSlot(slot: WeaponSlot): Weapon[] {

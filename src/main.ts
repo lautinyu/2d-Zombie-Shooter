@@ -16,12 +16,19 @@ import {
 } from './missions'
 import type { ChapterId, Mission, PathInfo } from './missions'
 import { RadarChart } from './radar'
-import { chapterThreeWeapons, chapterTwoWeapons, weaponById, weaponsInSlot } from './weapons'
+import {
+  chapterFourWeapons,
+  chapterThreeWeapons,
+  chapterTwoWeapons,
+  weaponById,
+  weaponsInSlot,
+} from './weapons'
 import type { Weapon, WeaponId, WeaponSlot } from './weapons'
 import {
   loadProfile,
   missionAmberReward,
   missionChipReward,
+  missionCoreReward,
   missionReward,
   saveProfile,
 } from './profile'
@@ -95,6 +102,16 @@ app.innerHTML = `
       </div>
     </div>
 
+    <div id="truck-bar" class="absolute left-1/2 top-16 hidden w-[min(620px,84vw)] -translate-x-1/2">
+      <div class="flex items-baseline justify-between text-xs font-black uppercase tracking-widest">
+        <span class="text-orange-300">TRUCK INTEGRITY</span>
+        <span id="truck-text" class="text-slate-300"></span>
+      </div>
+      <div class="mt-1 h-5 w-full overflow-hidden rounded-md bg-black/70 ring-2 ring-orange-500/60">
+        <div id="truck-fill" class="h-full w-full bg-gradient-to-r from-amber-400 to-orange-600"></div>
+      </div>
+    </div>
+
     <div id="jungle-bar" class="absolute left-1/2 top-16 hidden w-[min(560px,80vw)] -translate-x-1/2">
       <div class="flex items-baseline justify-between text-xs font-black uppercase tracking-widest">
         <span id="jungle-label" class="text-lime-300">Objective</span>
@@ -146,6 +163,7 @@ app.innerHTML = `
       <div class="mt-4 text-center text-sm font-bold text-yellow-300">Scrap: <span id="menu-scrap">0</span>
         <span class="ml-3 text-cyan-300">Frozen Data Chips: <span id="menu-chips">0</span></span>
         <span class="ml-3 text-amber-400">Ancient Amber: <span id="menu-amber">0</span></span>
+        <span class="ml-3 text-orange-400">Rust Cores: <span id="menu-cores">0</span></span>
       </div>
       <div class="mt-5 flex justify-center">
         <button id="start-btn" class="rounded-xl bg-emerald-500 px-10 py-3 text-lg font-black tracking-wide text-emerald-950 hover:bg-emerald-400">Start Game</button>
@@ -202,6 +220,7 @@ app.innerHTML = `
         <div class="text-sm font-bold text-yellow-300">Scrap: <span id="arsenal-scrap">0</span>
           <span class="ml-3 text-cyan-300">Chips: <span id="arsenal-chips">0</span></span>
           <span class="ml-3 text-amber-400">Amber: <span id="arsenal-amber">0</span></span>
+          <span class="ml-3 text-orange-400">Cores: <span id="arsenal-cores">0</span></span>
         </div>
       </div>
       <div class="mt-4 flex gap-2 text-xs">
@@ -209,6 +228,7 @@ app.innerHTML = `
         <button id="slot-secondary" class="rounded-lg px-4 py-1.5 font-bold">Secondary / Melee</button>
         <button id="slot-chips" class="rounded-lg px-4 py-1.5 font-bold">❄ Chapter 2 Tech</button>
         <button id="slot-amber" class="rounded-lg px-4 py-1.5 font-bold">🌿 Ancient Tech</button>
+        <button id="slot-cores" class="rounded-lg px-4 py-1.5 font-bold">⚙️ Rust Tech</button>
       </div>
       <div class="mt-6 grid gap-6 md:grid-cols-[minmax(0,1fr)_320px]">
         <div id="weapon-list" class="space-y-2"></div>
@@ -312,6 +332,8 @@ function missionCard(m: Mission): HTMLElement {
               ? `<span class="rounded-md bg-lime-500/15 px-2 py-0.5 text-[11px] font-semibold text-lime-300">Destroy ${m.hives ?? 0} Spore Hives</span>`
               : m.type === 'supply'
                 ? `<span class="rounded-md bg-lime-500/15 px-2 py-0.5 text-[11px] font-semibold text-lime-300">Recover ${m.crates ?? 0} crates</span>`
+                : m.type === 'rail'
+                  ? '<span class="rounded-md bg-orange-500/15 px-2 py-0.5 text-[11px] font-semibold text-orange-300">Rail shooter · truck bed</span>'
                 : m.type === 'race'
                   ? '<span class="rounded-md bg-lime-500/15 px-2 py-0.5 text-[11px] font-semibold text-lime-300">Reach extraction</span>'
                   : `<span class="rounded-md bg-red-500/15 px-2 py-0.5 text-[11px] font-semibold text-red-300">${m.target} kills</span>`
@@ -320,7 +342,9 @@ function missionCard(m: Mission): HTMLElement {
       ? `<span class="rounded-md bg-cyan-500/15 px-2 py-0.5 text-[11px] font-semibold text-cyan-300">${missionChipReward(m)} chips</span>`
       : m.chapter === 3
         ? `<span class="rounded-md bg-amber-500/15 px-2 py-0.5 text-[11px] font-semibold text-amber-300">${missionAmberReward(m)} amber</span>`
-        : ''
+        : m.chapter === 4
+          ? `<span class="rounded-md bg-orange-500/15 px-2 py-0.5 text-[11px] font-semibold text-orange-300">${missionCoreReward(m)} cores</span>`
+          : ''
   card.innerHTML = `
     <div class="flex items-center justify-between">
       <span class="text-[11px] font-semibold uppercase tracking-wider text-emerald-400">${missionMapName(m)}</span>
@@ -368,12 +392,14 @@ const CHAPTER_LABEL: Record<ChapterId, string> = {
   1: '⬅️ RETURN TO CHAPTER 1: THE OUTBREAK',
   2: '➡️ TRAVEL TO CHAPTER 2: PROJECT HORIZON',
   3: '➡️ VENTURE TO CHAPTER 3: THE PRIMEVAL CANOPY',
+  4: '➡️ DRIVE EAST TO CHAPTER 4: THE SCORCHED RUSTLANDS',
 }
 
 const CHAPTER_STYLE: Record<ChapterId, string> = {
   1: 'bg-emerald-500/15 text-emerald-200 ring-emerald-400/60 hover:bg-emerald-500/25',
   2: 'bg-cyan-500/15 text-cyan-200 ring-cyan-400/60 hover:bg-cyan-500/25',
   3: 'bg-lime-500/15 text-lime-200 ring-lime-400/60 hover:bg-lime-500/25',
+  4: 'bg-orange-500/15 text-orange-200 ring-orange-400/60 hover:bg-orange-500/25',
 }
 
 /** Big stylised button that moves the mission board between chapters. */
@@ -389,9 +415,11 @@ function chapterButton(to: ChapterId, label = CHAPTER_LABEL[to]): HTMLElement {
     const note = document.createElement('div')
     note.className = 'mt-1 text-[11px] font-semibold uppercase tracking-widest text-slate-500'
     note.textContent =
-      to === 3
-        ? 'Locked — clear The Cryo-Stalker Infusion first'
-        : 'Locked — clear The Hive Mother first'
+      to === 4
+        ? 'Locked — clear The Canopy Leviathan first'
+        : to === 3
+          ? 'Locked — clear The Cryo-Stalker Infusion first'
+          : 'Locked — clear The Hive Mother first'
     const wrap = document.createElement('div')
     wrap.appendChild(btn)
     wrap.appendChild(note)
@@ -440,6 +468,30 @@ function renderChapterThree() {
   list.className = 'grid gap-4 md:grid-cols-2'
   for (const m of chapterMissions(3)) list.appendChild(missionCard(m))
   campaignEl.appendChild(list)
+  campaignEl.appendChild(chapterButton(4))
+  campaignEl.appendChild(
+    chapterButton(2, '⬅️ RETURN TO CHAPTER 2: PROJECT HORIZON')
+  )
+  campaignEl.appendChild(chapterButton(1))
+}
+
+/** Chapter 4's desert board: the eight Rustlands runs, in convoy order. */
+function renderChapterFour() {
+  const info = CHAPTERS[3]
+  const header = document.createElement('div')
+  header.className = 'rounded-2xl bg-orange-500/5 p-4 ring-1 ring-orange-400/30'
+  header.innerHTML = `
+    <h3 class="text-sm font-black uppercase tracking-wider text-orange-200">${info.title}</h3>
+    <p class="mt-1 text-xs text-slate-400">${info.blurb}</p>
+    <div class="mt-2 text-xs font-semibold text-orange-300">Rust Cores: ${profile.cores} · scavengers here carry 2.5× health and hit 50% harder. Fueling the Rig is a mounted rail shooter — you ride the bed and aim 360°.</div>
+  `
+  campaignEl.appendChild(header)
+
+  const list = document.createElement('div')
+  list.className = 'grid gap-4 md:grid-cols-2'
+  for (const m of chapterMissions(4)) list.appendChild(missionCard(m))
+  campaignEl.appendChild(list)
+  campaignEl.appendChild(chapterButton(3, '⬅️ RETURN TO CHAPTER 3: THE PRIMEVAL CANOPY'))
   campaignEl.appendChild(
     chapterButton(2, '⬅️ RETURN TO CHAPTER 2: PROJECT HORIZON')
   )
@@ -448,6 +500,10 @@ function renderChapterThree() {
 
 function renderCampaign() {
   campaignEl.innerHTML = ''
+  if (chapter === 4) {
+    renderChapterFour()
+    return
+  }
   if (chapter === 3) {
     renderChapterThree()
     return
@@ -736,8 +792,8 @@ el('characters-close').addEventListener('click', () => {
 type ArsenalMode = 'shop' | 'locker'
 let arsenalMode: ArsenalMode = 'shop'
 /** Shop/locker tabs: the two scrap slots plus the premium chapter tabs. */
-type ArsenalTab = WeaponSlot | 'chips' | 'amber'
-const ARSENAL_TABS: ArsenalTab[] = ['primary', 'secondary', 'chips', 'amber']
+type ArsenalTab = WeaponSlot | 'chips' | 'amber' | 'cores'
+const ARSENAL_TABS: ArsenalTab[] = ['primary', 'secondary', 'chips', 'amber', 'cores']
 let arsenalSlot: ArsenalTab = 'primary'
 let selectedWeapon: Weapon = weaponById(profile.primary)
 
@@ -757,6 +813,8 @@ function persist() {
   el('arsenal-chips').textContent = `${profile.chips}`
   el('menu-amber').textContent = `${profile.amber}`
   el('arsenal-amber').textContent = `${profile.amber}`
+  el('menu-cores').textContent = `${profile.cores}`
+  el('arsenal-cores').textContent = `${profile.cores}`
   el('menu-equipped').textContent = `${weaponById(profile.primary).name} + ${
     weaponById(profile.secondary).name
   }`
@@ -789,7 +847,9 @@ function slotWeapons(): Weapon[] {
       ? chapterTwoWeapons()
       : arsenalSlot === 'amber'
         ? chapterThreeWeapons()
-        : weaponsInSlot(arsenalSlot)
+        : arsenalSlot === 'cores'
+          ? chapterFourWeapons()
+          : weaponsInSlot(arsenalSlot)
   return arsenalMode === 'shop' ? inSlot : inSlot.filter((w) => owns(w.id))
 }
 
@@ -797,12 +857,14 @@ function slotWeapons(): Weapon[] {
 function priceLabel(w: Weapon): string {
   if (w.currency === 'chips') return `${w.price} chips`
   if (w.currency === 'amber') return `${w.price} amber`
+  if (w.currency === 'cores') return `${w.price} cores`
   return `${w.price} scrap`
 }
 
 function balanceFor(w: Weapon): number {
   if (w.currency === 'chips') return profile.chips
   if (w.currency === 'amber') return profile.amber
+  if (w.currency === 'cores') return profile.cores
   return profile.scrap
 }
 
@@ -820,7 +882,9 @@ function renderSlotTabs() {
           ? 'bg-cyan-400 text-cyan-950'
           : slot === 'amber'
             ? 'bg-amber-400 text-amber-950'
-            : 'bg-emerald-500 text-emerald-950'
+            : slot === 'cores'
+              ? 'bg-orange-400 text-orange-950'
+              : 'bg-emerald-500 text-emerald-950'
         : 'bg-white/10 text-slate-300 hover:bg-white/20'
     }`
   }
@@ -842,7 +906,7 @@ function renderArsenal() {
       ? '<span class="text-xs font-bold text-emerald-300">EQUIPPED</span>'
       : owned
         ? '<span class="text-xs font-bold text-sky-300">OWNED</span>'
-        : `<span class="text-xs font-bold ${w.currency === 'chips' ? 'text-cyan-300' : w.currency === 'amber' ? 'text-amber-300' : 'text-yellow-300'}">${priceLabel(w)}</span>`
+        : `<span class="text-xs font-bold ${w.currency === 'chips' ? 'text-cyan-300' : w.currency === 'amber' ? 'text-amber-300' : w.currency === 'cores' ? 'text-orange-300' : 'text-yellow-300'}">${priceLabel(w)}</span>`
     row.innerHTML = `
       <span class="flex items-center gap-3">
         <span class="inline-block h-3 w-3 rounded-full" style="background:${w.color}"></span>
@@ -892,6 +956,10 @@ function renderDetail() {
         ? affordable
           ? 'bg-amber-400 text-amber-950 hover:bg-amber-300'
           : 'bg-amber-500/20 text-amber-200/70'
+        : w.currency === 'cores'
+          ? affordable
+            ? 'bg-orange-400 text-orange-950 hover:bg-orange-300'
+            : 'bg-orange-500/20 text-orange-200/70'
         : w.currency === 'chips'
           ? affordable
             ? 'bg-cyan-400 text-cyan-950 hover:bg-cyan-300'
@@ -910,13 +978,20 @@ detailAction.addEventListener('click', () => {
   } else if (balanceFor(w) >= w.price) {
     if (w.currency === 'chips') profile.chips -= w.price
     else if (w.currency === 'amber') profile.amber -= w.price
+    else if (w.currency === 'cores') profile.cores -= w.price
     else profile.scrap -= w.price
     profile.owned.push(w.id)
     profile[w.slot] = w.id
   } else {
     const short = w.price - balanceFor(w)
     const unit =
-      w.currency === 'chips' ? 'data chips' : w.currency === 'amber' ? 'ancient amber' : 'scrap'
+      w.currency === 'chips'
+        ? 'data chips'
+        : w.currency === 'amber'
+          ? 'ancient amber'
+          : w.currency === 'cores'
+            ? 'rust cores'
+            : 'scrap'
     detailNote.textContent = `Need ${short} more ${unit}.`
     return
   }
@@ -984,12 +1059,18 @@ game.onStateChange = (state: GameState) => {
     const amberTotal =
       state === 'won' && currentMission.chapter === 3 ? missionAmberReward(currentMission) : 0
     profile.amber += amberTotal
+    // Rust Cores are salvaged only out of the Rustlands.
+    const coreTotal =
+      state === 'won' && currentMission.chapter === 4 ? missionCoreReward(currentMission) : 0
+    profile.cores += coreTotal
     persist()
     const chipText = chipTotal
       ? ` · +${chipTotal} frozen data chips`
       : amberTotal
         ? ` · +${amberTotal} ancient amber`
-        : ''
+        : coreTotal
+          ? ` · +${coreTotal} rust cores`
+          : ''
     const rewardText =
       state === 'won'
         ? `+${total} scrap earned (${game.scrapEarned} from kills, ${bonus} mission bonus)${chipText}`
@@ -1010,6 +1091,8 @@ game.onStateChange = (state: GameState) => {
         ? `${currentMission.name} complete — you held ${where} for the full ${Math.round((currentMission.holdTime ?? 0) / 60)} minutes.`
       : currentMission.type === 'generator'
         ? `${currentMission.name} complete — the generator is still running in ${where}.`
+      : currentMission.type === 'rail'
+        ? `${currentMission.name} complete — the rig rolled into the depot with its plating still on.`
       : currentMission.type === 'boss'
         ? `${currentMission.name} complete — the Mutated Alpha Bug is dead. The hive falls silent.`
         : currentMission.type === 'protect'
@@ -1022,6 +1105,7 @@ game.onStateChange = (state: GameState) => {
     const infected = game.deathCause === 'infection'
     const lostSurvivor = game.deathCause === 'survivor'
     const lostGenerator = game.deathCause === 'generator'
+    const lostTruck = game.deathCause === 'truck'
     const title = el('lose-title')
     const tagline = el('lose-tagline')
     title.textContent = infected
@@ -1030,7 +1114,9 @@ game.onStateChange = (state: GameState) => {
         ? 'SURVIVOR LOST'
         : lostGenerator
           ? 'GENERATOR DESTROYED'
-          : 'GAME OVER'
+          : lostTruck
+            ? 'TRUCK DESTROYED'
+            : 'GAME OVER'
     title.className = `text-6xl font-black ${infected ? 'animate-pulse text-orange-400' : 'text-red-500'}`
     tagline.classList.toggle('hidden', !infected)
     tagline.className = `mt-4 text-2xl font-bold text-orange-300 ${infected ? 'animate-pulse' : 'hidden'}`
@@ -1045,7 +1131,9 @@ game.onStateChange = (state: GameState) => {
         ? `A survivor died in ${where}. The escort is over.`
         : lostGenerator
           ? `The generator fell in ${where}. The camp freezes over.`
-          : `You fell in ${where} with ${game.kills} zombies cleared.`
+          : lostTruck
+            ? `The rig broke apart on ${where}. The convoy never reaches the depot.`
+            : `You fell in ${where} with ${game.kills} zombies cleared.`
   }
 }
 
@@ -1075,6 +1163,9 @@ const holdClock = el('hold-clock')
 const generatorBar = el('generator-bar')
 const generatorText = el('generator-text')
 const generatorFill = el('generator-fill')
+const truckBar = el('truck-bar')
+const truckText = el('truck-text')
+const truckFill = el('truck-fill')
 const jungleBar = el('jungle-bar')
 const jungleLabel = el('jungle-label')
 const jungleText = el('jungle-text')
@@ -1236,6 +1327,22 @@ game.onHud = (h: Hud) => {
     }`
   }
 
+  truckBar.classList.toggle('hidden', !h.truck)
+  if (h.truck) {
+    const pct = (h.truck.hp / h.truck.maxHp) * 100
+    truckText.textContent = `${h.truck.hp}/${h.truck.maxHp} · ${h.truck.progress}% of the highway`
+    truckFill.style.width = `${pct}%`
+    truckFill.className = `h-full ${
+      pct > 50
+        ? 'bg-gradient-to-r from-amber-400 to-orange-600'
+        : pct > 25
+          ? 'bg-gradient-to-r from-orange-400 to-red-500'
+          : 'bg-gradient-to-r from-red-500 to-rose-700 animate-pulse'
+    }`
+  }
+  // The convoy bar owns the top slot, so the objective readout drops below it.
+  jungleBar.style.top = h.truck ? '7rem' : ''
+
   jungleBar.classList.toggle('hidden', !h.jungle)
   if (h.jungle) {
     jungleLabel.textContent = h.jungle.label
@@ -1314,6 +1421,7 @@ bindCheatCodes({
     profile.scrap += CHEAT_CURRENCY
     profile.chips += CHEAT_CURRENCY
     profile.amber += CHEAT_CURRENCY
+    profile.cores += CHEAT_CURRENCY
     persist()
     renderCampaign()
     renderArsenal()
