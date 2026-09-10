@@ -504,6 +504,10 @@ const ACID_DPS = 16
 const MUTATION_SKIN_FADE = 2.5
 /** How fast the hand kickback settles after a shot. */
 const RECOIL_RECOVERY = 7
+/** Ammo crates drop often enough to keep sustained fire going, more so on bosses. */
+const AMMO_DROP_CHANCE = 0.55
+const AMMO_DROP_CHANCE_BOSS = 0.75
+const AMMO_DROP_AMOUNT = 30
 /** Seconds a melee blade takes to travel through its full arc. */
 const MELEE_SWING_TIME = 0.22
 /** Half-width of the blade's own hit wedge as it sweeps. */
@@ -2385,8 +2389,10 @@ export class Game {
     if (this.mutation?.id === 'toxic-blood') {
       this.acid.push({ x: z.x, y: z.y, r: ACID_RADIUS, life: ACID_LIFE, maxLife: ACID_LIFE })
     }
-    if (Math.random() < 0.22) {
-      this.ammoBoxes.push({ x: z.x, y: z.y, amount: 20 })
+    const dropChance =
+      this.mission?.type === 'boss' ? AMMO_DROP_CHANCE_BOSS : AMMO_DROP_CHANCE
+    if (Math.random() < dropChance) {
+      this.ammoBoxes.push({ x: z.x, y: z.y, amount: AMMO_DROP_AMOUNT })
     }
   }
 
