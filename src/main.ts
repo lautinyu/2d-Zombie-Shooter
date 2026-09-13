@@ -161,14 +161,16 @@ app.innerHTML = `
   </div>
 
   <!-- Main menu -->
-  <div id="menu" class="absolute inset-0 flex items-center justify-center overflow-y-auto bg-slate-950/95 p-6">
+  <div id="menu" class="absolute inset-0 h-screen max-h-screen flex-col items-center overflow-y-auto bg-slate-950/95 px-6 pb-10 pt-6">
     <div class="w-full max-w-4xl">
-      <h1 class="text-center text-5xl font-black tracking-tight text-emerald-400 drop-shadow">ZOMBIE SHOOTER</h1>
-      <p class="mt-2 text-center text-sm text-slate-400">Top-down survival · pick a mission, clear the zone, get out alive.</p>
-      <div class="mt-4 text-center text-sm font-bold text-yellow-300">Scrap: <span id="menu-scrap">0</span>
-        <span class="ml-3 text-cyan-300">Frozen Data Chips: <span id="menu-chips">0</span></span>
-        <span class="ml-3 text-amber-400">Ancient Amber: <span id="menu-amber">0</span></span>
-        <span class="ml-3 text-orange-400">Rust Cores: <span id="menu-cores">0</span></span>
+      <div class="sticky top-0 z-10 -mx-6 bg-slate-950/95 px-6 pb-3 pt-1 backdrop-blur">
+        <h1 class="text-center text-5xl font-black tracking-tight text-emerald-400 drop-shadow">ZOMBIE SHOOTER</h1>
+        <p class="mt-2 text-center text-sm text-slate-400">Top-down survival · pick a mission, clear the zone, get out alive.</p>
+        <div class="mt-4 text-center text-sm font-bold text-yellow-300">Scrap: <span id="menu-scrap">0</span>
+          <span class="ml-3 text-cyan-300">Frozen Data Chips: <span id="menu-chips">0</span></span>
+          <span class="ml-3 text-amber-400">Ancient Amber: <span id="menu-amber">0</span></span>
+          <span class="ml-3 text-orange-400">Rust Cores: <span id="menu-cores">0</span></span>
+        </div>
       </div>
       <div class="mt-5 flex justify-center">
         <button id="start-btn" class="rounded-xl bg-emerald-500 px-10 py-3 text-lg font-black tracking-wide text-emerald-950 hover:bg-emerald-400">Start Game</button>
@@ -178,8 +180,6 @@ app.innerHTML = `
         <button id="locker-btn" class="rounded-lg bg-sky-500/15 px-6 py-2 text-sm font-bold text-sky-300 ring-1 ring-sky-400/40 hover:bg-sky-500/25">Locker</button>
         <button id="textures-btn" class="rounded-lg bg-violet-500/15 px-6 py-2 text-sm font-bold text-violet-300 ring-1 ring-violet-400/40 hover:bg-violet-500/25">Texture Pack</button>
         <button id="arcade-hub-btn" class="animate-pulse rounded-lg bg-cyan-500/20 px-6 py-2 text-sm font-black uppercase tracking-widest text-cyan-200 ring-2 ring-cyan-400/70 shadow-[0_0_22px_rgba(34,211,238,0.5)] hover:bg-cyan-500/35">🕹️ Arcade Hub</button>
-        <button id="arcade-btn" class="animate-pulse rounded-lg bg-rose-500/20 px-6 py-2 text-sm font-black uppercase tracking-widest text-rose-200 ring-2 ring-rose-400/70 shadow-[0_0_22px_rgba(244,63,94,0.5)] hover:bg-rose-500/35">🕹️ Play Arcade: Crimson Highway</button>
-        <button id="voidblast-btn" class="animate-pulse rounded-lg bg-fuchsia-500/20 px-6 py-2 text-sm font-black uppercase tracking-widest text-fuchsia-200 ring-2 ring-fuchsia-400/70 shadow-[0_0_22px_rgba(217,70,239,0.5)] hover:bg-fuchsia-500/35">🕹️ Play Arcade: Void Blast</button>
       </div>
       <div class="mt-4 flex items-center justify-center gap-2 text-xs">
         <span class="font-semibold uppercase tracking-wider text-slate-400">Players</span>
@@ -1062,8 +1062,6 @@ function enterCabinet(openCabinet: () => void) {
 }
 
 el('arcade-hub-btn').addEventListener('click', () => enterCabinet(() => arcadeHub.open()))
-el('arcade-btn').addEventListener('click', () => enterCabinet(() => arcade.open()))
-el('voidblast-btn').addEventListener('click', () => enterCabinet(() => voidBlast.open()))
 
 el('shop-btn').addEventListener('click', () => openArsenal('shop'))
 el('locker-btn').addEventListener('click', () => openArsenal('locker'))
