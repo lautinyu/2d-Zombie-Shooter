@@ -29,6 +29,16 @@ const BASE_SPAWN_INTERVAL = 1.15
 const BULLET_SPEED = 900
 const FIRE_INTERVAL = 0.14
 
+/** A boss rolls up on every 1,000 m mark and holds the road until it dies. */
+const BOSS_INTERVAL_METRES = 1000
+const BOSS_RAM_DAMAGE = 110
+/** Scrap plating on the crawler halves every bullet that lands on it. */
+const CRAWLER_ARMOUR = 0.5
+const BOSS_NAMES: Record<'crawler' | 'charger', string> = {
+  crawler: 'ARMORED HIGHWAY CRAWLER',
+  charger: 'MUTATED CHARGER',
+}
+
 const TRUCK_X = 210
 const TRUCK_Y = VIEW_H / 2
 const TRUCK_HW = 130
@@ -62,6 +72,30 @@ interface Zombie {
   speed: number
   hue: number
   flash: number
+}
+
+type BossKind = 'crawler' | 'charger'
+
+/**
+ * Gauntlet boss. The crawler grinds forward behind scrap plating and slams
+ * the rig; the charger circles out of reach then dashes straight through it.
+ */
+interface Boss {
+  kind: BossKind
+  x: number
+  y: number
+  r: number
+  hp: number
+  maxHp: number
+  speed: number
+  flash: number
+  /** Seconds until the next dash (charger) or plate slam (crawler). */
+  attackTimer: number
+  /** Seconds left of an active dash; 0 while circling or grinding in. */
+  dash: number
+  vx: number
+  vy: number
+  orbit: number
 }
 
 interface Bullet {
@@ -141,6 +175,9 @@ export function mountEndlessGauntlet(onQuit: () => void): GauntletCabinet {
     { id: 2, x: 0, y: 0, angle: 0, fireTimer: 0, welding: 0 },
   ]
   let zombies: Zombie[] = []
+  let boss: Boss | null = null
+  let bossesDown = 0
+  let nextBossAt = BOSS_INTERVAL_METRES
   let bullets: Bullet[] = []
   let sparks: Spark[] = []
 
@@ -172,6 +209,9 @@ export function mountEndlessGauntlet(onQuit: () => void): GauntletCabinet {
     zombies = []
     bullets = []
     sparks = []
+    boss = null
+    bossesDown = 0
+    nextBossAt = BOSS_INTERVAL_METRES
     for (const g of gunners) {
       g.angle = 0
       g.fireTimer = 0
@@ -204,6 +244,112 @@ export function mountEndlessGauntlet(onQuit: () => void): GauntletCabinet {
       hue: tough ? 14 : 96,
       flash: 0,
     })
+  }
+
+  /** Every 1,000 m the horde stands down and one of two bosses rolls in. */
+  const spawnBoss = () => {
+    const wave = bossesDown
+    const kind: BossKind = wave % 2 === 0 ? 'crawler' : 'charger'
+    const tier = 1 + wave * 0.45
+    const hp = (kind === 'crawler' ? 2200 : 1500) * tier
+    boss = {
+      kind,
+      x: VIEW_W + 90,
+      y: TRUCK_Y + (Math.random() - 0.5) * 160,
+      r: kind === 'crawler' ? 44 : 30,
+      hp,
+      maxHp: hp,
+      speed: (kind === 'crawler' ? 46 : 74) * enemySpeedScale(),
+      flash: 0,
+      attackTimer: kind === 'crawler' ? 3 : 2.2,
+      dash: 0,
+      vx: 0,
+      vy: 0,
+      orbit: Math.random() * Math.PI * 2,
+    }
+    shake = Math.max(shake, 0.6)
+    playSfx('explosion')
+  }
+
+  /** Crawler plating soaks half of every round; the charger takes it raw. */
+  const bossArmour = (b: Boss) => (b.kind === 'crawler' ? CRAWLER_ARMOUR : 1)
+
+  const updateBoss = (b: Boss, dt: number) => {
+    b.flash = Math.max(0, b.flash - dt)
+    b.attackTimer -= dt
+    const dx = TRUCK_X - b.x
+    const dy = TRUCK_Y - b.y
+    const len = Math.hypot(dx, dy) || 1
+
+    if (b.kind === 'charger') {
+      if (b.dash > 0) {
+        b.dash -= dt
+        b.x += b.vx * dt
+        b.y += b.vy * dt
+      } else {
+        // Circle the rig at a stand-off distance, winding up the next dash.
+        b.orbit += dt * 1.1
+        const ring = 300
+        const tx = TRUCK_X + Math.cos(b.orbit) * ring
+        const ty = TRUCK_Y + Math.sin(b.orbit) * ring * 0.55
+        const ox = tx - b.x
+        const oy = ty - b.y
+        const olen = Math.hypot(ox, oy) || 1
+        b.x += (ox / olen) * b.speed * 1.6 * dt
+        b.y += (oy / olen) * b.speed * 1.6 * dt
+        if (b.attackTimer <= 0) {
+          b.attackTimer = 2.6
+          b.dash = 1.1
+          b.vx = (dx / len) * b.speed * 6
+          b.vy = (dy / len) * b.speed * 6
+          playSfx('sting')
+        }
+      }
+    } else {
+      b.x += (dx / len) * b.speed * dt
+      b.y += (dy / len) * b.speed * dt
+      // Plate slam: a shockwave of shrapnel thrown down the road.
+      if (b.attackTimer <= 0) {
+        b.attackTimer = 3.4
+        shake = Math.max(shake, 0.35)
+        for (let i = 0; i < 10; i++) {
+          const a = (i / 10) * Math.PI * 2
+          sparks.push({ x: b.x + Math.cos(a) * b.r, y: b.y + Math.sin(a) * b.r, life: 0.4, color: '#fb923c' })
+        }
+      }
+    }
+
+    b.x = Math.max(-120, Math.min(VIEW_W + 140, b.x))
+    b.y = Math.max(-80, Math.min(VIEW_H + 80, b.y))
+
+    if (hitsRig(b.x, b.y, b.r)) {
+      rigIntegrity -= BOSS_RAM_DAMAGE
+      shake = Math.max(shake, 0.7)
+      playSfx('explosion')
+      sparks.push({ x: b.x, y: b.y, life: 0.4, color: '#f87171' })
+      // Bounced off the chassis: the boss is thrown clear and resets.
+      b.dash = 0
+      b.x = VIEW_W + 80
+      b.y = TRUCK_Y + (Math.random() - 0.5) * 200
+      b.attackTimer = b.kind === 'charger' ? 2.6 : 3.4
+    }
+
+    if (b.hp <= 0) {
+      bossesDown += 1
+      kills += 1
+      nextBossAt = (Math.floor(distance / BOSS_INTERVAL_METRES) + 1) * BOSS_INTERVAL_METRES
+      shake = Math.max(shake, 0.8)
+      playSfx('explosion')
+      for (let i = 0; i < 24; i++) {
+        sparks.push({
+          x: b.x + (Math.random() - 0.5) * b.r * 3,
+          y: b.y + (Math.random() - 0.5) * b.r * 3,
+          life: 0.5,
+          color: Math.random() < 0.5 ? '#fbbf24' : '#f97316',
+        })
+      }
+      boss = null
+    }
   }
 
   const fire = (g: Gunner) => {
@@ -276,11 +422,16 @@ export function mountEndlessGauntlet(onQuit: () => void): GauntletCabinet {
       }
     }
 
-    spawnTimer -= dt
-    if (spawnTimer <= 0) {
-      spawnTimer = spawnInterval()
-      spawnZombie()
-      if (milestones() >= 4 && Math.random() < 0.35) spawnZombie()
+    if (!boss && distance >= nextBossAt) spawnBoss()
+
+    // Standard waves stand down for the duration of a boss encounter.
+    if (!boss) {
+      spawnTimer -= dt
+      if (spawnTimer <= 0) {
+        spawnTimer = spawnInterval()
+        spawnZombie()
+        if (milestones() >= 4 && Math.random() < 0.35) spawnZombie()
+      }
     }
 
     for (const b of bullets) {
@@ -301,6 +452,13 @@ export function mountEndlessGauntlet(onQuit: () => void): GauntletCabinet {
 
     for (let i = bullets.length - 1; i >= 0; i--) {
       const b = bullets[i]
+      if (boss && (boss.x - b.x) ** 2 + (boss.y - b.y) ** 2 < boss.r * boss.r) {
+        boss.hp -= 46 * bossArmour(boss)
+        boss.flash = 0.1
+        sparks.push({ x: b.x, y: b.y, life: 0.18, color: '#fde68a' })
+        bullets.splice(i, 1)
+        continue
+      }
       for (const z of zombies) {
         if (z.hp <= 0) continue
         if ((z.x - b.x) ** 2 + (z.y - b.y) ** 2 > z.r * z.r) continue
@@ -327,6 +485,8 @@ export function mountEndlessGauntlet(onQuit: () => void): GauntletCabinet {
       sparks.push({ x: z.x, y: z.y, life: 0.3, color: '#fb923c' })
       playSfx('explosion')
     }
+
+    if (boss) updateBoss(boss, dt)
 
     if (rigIntegrity <= 0) {
       rigIntegrity = 0
@@ -424,6 +584,42 @@ export function mountEndlessGauntlet(onQuit: () => void): GauntletCabinet {
     ctx.fillStyle = '#fca5a5'
     ctx.fillText(`THREAT x${(1 + SPAWN_RATE_STEP * milestones()).toFixed(2)}`, VIEW_W - 16, 66)
     ctx.restore()
+    if (boss) drawBossBar(boss)
+  }
+
+  const drawBossBar = (b: Boss) => {
+    ctx.save()
+    ctx.textAlign = 'center'
+    ctx.font = 'bold 15px ui-monospace, monospace'
+    ctx.fillStyle = '#f87171'
+    ctx.fillText(BOSS_NAMES[b.kind], VIEW_W / 2, VIEW_H - 44)
+    ctx.restore()
+    bar(VIEW_W / 2 - 220, VIEW_H - 34, 440, 16, b.hp / b.maxHp, '#ef4444')
+  }
+
+  const drawBoss = (b: Boss) => {
+    ctx.save()
+    ctx.translate(b.x, b.y)
+    ctx.fillStyle = b.flash > 0 ? '#fff' : b.kind === 'crawler' ? '#57534e' : '#7f1d1d'
+    ctx.beginPath()
+    ctx.arc(0, 0, b.r, 0, Math.PI * 2)
+    ctx.fill()
+    if (b.kind === 'crawler') {
+      // Bolted scrap plates across the front of the hull.
+      ctx.fillStyle = '#a8a29e'
+      for (let i = -1; i <= 1; i++) ctx.fillRect(-b.r * 0.2, i * 18 - 7, b.r * 0.9, 14)
+    } else {
+      ctx.fillStyle = b.dash > 0 ? '#fca5a5' : '#ef4444'
+      ctx.beginPath()
+      ctx.arc(0, 0, b.r * 0.5, 0, Math.PI * 2)
+      ctx.fill()
+    }
+    ctx.strokeStyle = '#fbbf24'
+    ctx.lineWidth = 3
+    ctx.beginPath()
+    ctx.arc(0, 0, b.r + 4, 0, Math.PI * 2)
+    ctx.stroke()
+    ctx.restore()
   }
 
   const render = () => {
@@ -439,6 +635,7 @@ export function mountEndlessGauntlet(onQuit: () => void): GauntletCabinet {
       ctx.fillStyle = 'rgba(15,23,42,0.6)'
       ctx.fillRect(z.x - z.r * 0.4, z.y - z.r * 0.3, z.r * 0.8, z.r * 0.25)
     }
+    if (boss) drawBoss(boss)
     for (const b of bullets) {
       ctx.fillStyle = '#fde68a'
       ctx.fillRect(b.x - 4, b.y - 2, 8, 4)

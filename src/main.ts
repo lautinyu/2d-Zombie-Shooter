@@ -202,7 +202,7 @@ app.innerHTML = `
         <span class="font-mono text-slate-200">E</span> for your character's active ability (Engineer also drops a barricade with <span class="font-mono text-slate-200">F</span>).
         Each mission loads its own isolated map. Yellow crates restock ammo.
         <span class="font-semibold text-orange-300">Orange Plague Bugs</span> are fast and sting — five stings and you turn.
-        <div class="mt-2"><span class="font-semibold text-slate-200">Co-op:</span> Player 2 moves with the Arrow keys, auto-aims at the nearest enemy and fires on its own or with the <span class="font-mono text-slate-200">.</span> key. Their ability is <span class="font-mono text-slate-200">M</span> (barricade <span class="font-mono text-slate-200">L</span>), and <span class="font-mono text-slate-200">N</span> swaps their weapon.</div>
+        <div class="mt-2"><span class="font-semibold text-slate-200">Co-op:</span> Player 2 moves with the Arrow keys, auto-aims at the nearest enemy and fires on its own, or on demand with <span class="font-mono text-slate-200">.</span>, <span class="font-mono text-slate-200">Numpad 0</span> or <span class="font-mono text-slate-200">Right Ctrl</span>. Their ability is <span class="font-mono text-slate-200">M</span> (barricade <span class="font-mono text-slate-200">L</span>), and <span class="font-mono text-slate-200">N</span> swaps their weapon.</div>
       </div>
       </div>
     </div>

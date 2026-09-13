@@ -16,6 +16,8 @@ export const keysPressed = {
   right: false,
   // Mouse fire button, tracked independently of every key above.
   shooting: false,
+  // Player 2's own trigger: '.', Numpad 0 or the right Control key.
+  shootingP2: false,
   // Held to collect supply crates; shared by both local players.
   interact: false,
   // Per-player retrieve keys: E for player 1, M for player 2.
@@ -42,6 +44,12 @@ const MOVEMENT: Record<string, MovementKey> = {
 }
 
 const SCROLL_KEYS = ['arrowup', 'arrowdown', 'arrowleft', 'arrowright', ' ']
+
+/** Player 2 holds any of these to fire without waiting on auto-aim. */
+function isP2Trigger(e: KeyboardEvent): boolean {
+  const code = e.code.toLowerCase()
+  return e.key === '.' || code === 'numpad0' || code === 'controlright'
+}
 
 /** One-shot key presses; movement is never routed through these. */
 export interface InputActions {
@@ -86,13 +94,12 @@ export function bindInput(canvas: HTMLCanvasElement, actions: InputActions) {
     // the auto-repeat events.
     if (key === 'e') keysPressed.interactP1 = true
     if (key === 'm') keysPressed.interactP2 = true
+    if (isP2Trigger(e)) keysPressed.shootingP2 = true
     if (e.repeat) return
+    if (isP2Trigger(e)) actions.p2Shot()
     switch (key) {
       case 'r':
         actions.reload()
-        break
-      case '.':
-        actions.p2Shot()
         break
       case 'e':
         actions.p1Ability()
@@ -126,6 +133,7 @@ export function bindInput(canvas: HTMLCanvasElement, actions: InputActions) {
     if (key === ' ') keysPressed.interact = false
     if (key === 'e') keysPressed.interactP1 = false
     if (key === 'm') keysPressed.interactP2 = false
+    if (isP2Trigger(e)) keysPressed.shootingP2 = false
   })
 
   // A window that loses focus stops receiving keyup, so drop everything.

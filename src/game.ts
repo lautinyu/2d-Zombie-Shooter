@@ -6,10 +6,16 @@ import { characterById } from './characters'
 import {
   CH2_DAMAGE_SCALE,
   CH2_HP_SCALE,
+  CH2_SPEED_SCALE,
   CH3_DAMAGE_SCALE,
   CH3_HP_SCALE,
+  CH3_SPAWN_SCALE,
+  CH3_SPEED_SCALE,
+  CH4_ARMOUR,
   CH4_DAMAGE_SCALE,
   CH4_HP_SCALE,
+  CH4_SPAWN_SCALE,
+  CH4_SPEED_SCALE,
 } from './missions'
 import { CHIPS_PER_KILL, SCRAP_PER_BUG, SCRAP_PER_KILL } from './profile'
 import { CRYO_SLOW, CRYO_SLOW_TIME, MAX_POISON_STACKS } from './weapons'
@@ -612,6 +618,8 @@ const SURVIVOR_AGGRO_BIAS = 0.75
 const COOP_CAMERA_MARGIN = 420
 const MIN_ZOOM = 0.5
 const P2_AUTO_FIRE_RANGE = 620
+/** Radians per second player 2's muzzle sweeps while tracking a target. */
+const P2_TURN_RATE = 11
 const TURRET_RANGE = 460
 const TURRET_INTERVAL = 0.55
 const TURRET_DAMAGE = 9
@@ -1449,6 +1457,7 @@ export class Game {
     this.updateTurrets(dt)
     this.updateEnemies(dt)
     this.separateBodies()
+    this.pushOffPlayers()
     this.updatePickups(dt)
     this.updateAcid(dt)
     this.updateBlasts(dt)
@@ -1717,6 +1726,29 @@ export class Game {
     if (chapter === 4) return CH4_HP_SCALE
     if (chapter === 3) return CH3_HP_SCALE
     return chapter === 2 ? CH2_HP_SCALE : 1
+  }
+
+  /** Later chapters also field quicker variants. */
+  private get speedScale(): number {
+    const chapter = this.mission?.chapter
+    if (chapter === 4) return CH4_SPEED_SCALE
+    if (chapter === 3) return CH3_SPEED_SCALE
+    return chapter === 2 ? CH2_SPEED_SCALE : 1
+  }
+
+  /** Waves arrive this much faster in the jungle and the Rustlands. */
+  private get spawnScale(): number {
+    const chapter = this.mission?.chapter
+    if (chapter === 4) return CH4_SPAWN_SCALE
+    return chapter === 3 ? CH3_SPAWN_SCALE : 1
+  }
+
+  /**
+   * Damage multiplier applied to every hit an enemy takes: the global
+   * Hardened mutation stacks with Rustlands scrap plating.
+   */
+  private get enemyArmour(): number {
+    return this.mutationArmour * (this.mission?.chapter === 4 ? CH4_ARMOUR : 1)
   }
 
   /** ...and all of them hit harder than their chapter 1 kin. */
@@ -2138,10 +2170,21 @@ export class Game {
 
     if (p.auto) {
       const mark = this.nearestEnemyTo(p, 1200)
-      if (mark && !steered) p.angle = Math.atan2(mark.y - p.y, mark.x - p.x)
+      if (!steered) {
+        // Continuous rotation towards the mark (or the heading being walked)
+        // instead of snapping the muzzle onto a cardinal direction.
+        const want = mark
+          ? Math.atan2(mark.y - p.y, mark.x - p.x)
+          : move.x !== 0 || move.y !== 0
+            ? Math.atan2(move.y, move.x)
+            : p.angle
+        const turn = angleDelta(want, p.angle)
+        p.angle += clamp(turn, -P2_TURN_RATE * dt, P2_TURN_RATE * dt)
+      }
       // Hold fire unless the target is close and not behind a building.
       const inRange = mark && Math.hypot(mark.x - p.x, mark.y - p.y) < P2_AUTO_FIRE_RANGE
-      p.shooting = Boolean(inRange && mark && this.hasLineOfSight(p, mark))
+      p.shooting =
+        keysPressed.shootingP2 || Boolean(inRange && mark && this.hasLineOfSight(p, mark))
       if (p.mag === 0) this.startReload(p)
     } else if (steered) {
       p.shooting = keysPressed.shooting
@@ -2236,6 +2279,27 @@ export class Game {
       }
     }
     return best
+  }
+
+  /**
+   * Solid bodies: an enemy may touch a player but never stand inside one, so
+   * a crowd stacks up against the hitbox instead of clipping through it.
+   * Players are treated as immovable, and contact damage is unaffected.
+   */
+  private pushOffPlayers() {
+    for (const p of this.players) {
+      if (p.down) continue
+      for (const z of this.enemies) {
+        const min = p.r + z.r
+        const dx = z.x - p.x
+        const dy = z.y - p.y
+        const d = Math.hypot(dx, dy)
+        if (d >= min) continue
+        const angle = d < 0.001 ? Math.random() * Math.PI * 2 : Math.atan2(dy, dx)
+        const push = min - Math.min(d, min)
+        this.moveEnemy(z, Math.cos(angle) * push, Math.sin(angle) * push)
+      }
+    }
   }
 
   /** Enemy movement also respects deployed barricades. */
@@ -2451,7 +2515,7 @@ export class Game {
       const half = MELEE_BLADE_HALF + Math.atan2(e.r, Math.max(d, 1))
       if (Math.abs(angleDelta(to, blade)) > half) continue
       p.swingHits.push(e)
-      e.hp -= damage * this.mutationArmour
+      e.hp -= damage * this.enemyArmour
       this.moveEnemy(e, Math.cos(to) * melee.knockback, Math.sin(to) * melee.knockback)
       if (melee.stunChance > 0 && Math.random() < melee.stunChance) e.stun = melee.stunTime
       if (e.hp <= 0) this.killEnemy(i)
@@ -2591,7 +2655,7 @@ export class Game {
           if (segmentDistance(e.x, e.y, px, py, b.x, b.y) >= e.r + 2) continue
           b.hit.add(e)
           const travelled = 1 - b.life / b.maxLife
-          const armour = b.ignoreArmour ? 1 : this.mutationArmour
+          const armour = b.ignoreArmour ? 1 : this.enemyArmour
           e.hp -= b.damage * (1 - (1 - b.falloff) * travelled) * armour
           if (b.poison) {
             e.poison = POISON_DURATION
@@ -2625,7 +2689,7 @@ export class Game {
     for (let i = this.enemies.length - 1; i >= 0; i--) {
       const e = this.enemies[i]
       if (Math.hypot(e.x - b.x, e.y - b.y) > b.blast + e.r) continue
-      e.hp -= b.damage * this.mutationArmour
+      e.hp -= b.damage * this.enemyArmour
       e.stun = Math.max(e.stun, b.blastFreeze)
       e.slow = CRYO_SLOW_TIME
       if (e.hp <= 0) this.killEnemy(i)
@@ -3230,6 +3294,7 @@ export class Game {
       z.speed =
         (z.burn > 0 ? z.baseSpeed * BURN_SLOW : z.baseSpeed) *
         this.mutationSpeed *
+        this.speedScale *
         (z.slow > 0 ? CRYO_SLOW : 1)
 
       // A stunned enemy is frozen solid: no chasing, no attacking.
@@ -3429,7 +3494,7 @@ export class Game {
               : jungle
                 ? 1.2
                 : 0.9
-    this.spawnTimer /= density
+    this.spawnTimer /= density * this.spawnScale
 
     const spot = this.spawnPoint()
     if (!spot) return

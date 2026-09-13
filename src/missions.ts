@@ -51,17 +51,24 @@ export const CHAPTERS: ChapterInfo[] = [
   },
 ]
 
-/** Chapter 2 mutations are hardened by the cold. */
+/** Chapter 2 mutations are hardened by the cold, and quicker on their feet. */
 export const CH2_HP_SCALE = 1.5
 export const CH2_DAMAGE_SCALE = 1.3
+export const CH2_SPEED_SCALE = 1.1
 
-/** Jungle infected are twice as tough as their chapter 1 kin. */
+/** Jungle infected are twice as tough, and the canopy keeps them coming. */
 export const CH3_HP_SCALE = 2
 export const CH3_DAMAGE_SCALE = 1.3
+export const CH3_SPEED_SCALE = 1.1
+export const CH3_SPAWN_SCALE = 1.25
 
-/** Rustland scavengers are the toughest thing walking. */
-export const CH4_HP_SCALE = 2.5
+/** Rustland scavengers are the toughest thing walking, and they wear plate. */
+export const CH4_HP_SCALE = 2.75
 export const CH4_DAMAGE_SCALE = 1.5
+export const CH4_SPEED_SCALE = 1.2
+export const CH4_SPAWN_SCALE = 1.25
+/** Scrap plating soaks 20% of every hit a Rustlands scavenger takes. */
+export const CH4_ARMOUR = 0.8
 
 /** Chapter 2 opens once the Hive Mother is dead. */
 export const CHAPTER_2_GATE = 'finale'
