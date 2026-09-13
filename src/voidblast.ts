@@ -4,6 +4,8 @@
  * score, fully isolated from the campaign.
  */
 
+import { recordPlay } from './arcadeStats'
+
 const STORE_KEY = 'void-blast-highscore-v1'
 
 const VIEW_W = 480
@@ -407,6 +409,7 @@ export function mountVoidBlast(onQuit: () => void): VoidBlastCabinet {
   const start = () => {
     reset()
     phase = 'playing'
+    recordPlay('void-blast')
   }
 
   const onKeyDown = (e: KeyboardEvent) => {

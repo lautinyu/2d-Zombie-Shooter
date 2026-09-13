@@ -41,6 +41,9 @@ import { playBossDialogue, playOutro, playStoryIntro } from './cutscene'
 import { CHEAT_CURRENCY, bindCheatCodes } from './cheats'
 import { mountArcade } from './arcade'
 import { mountVoidBlast } from './voidblast'
+import { mountEndlessGauntlet } from './EndlessGauntlet'
+import { mountArcadeHub } from './ArcadeHubScene'
+import type { ArcadeGameId } from './arcadeStats'
 
 declare global {
   interface Window {
@@ -174,6 +177,7 @@ app.innerHTML = `
         <button id="shop-btn" class="rounded-lg bg-yellow-500/15 px-6 py-2 text-sm font-bold text-yellow-300 ring-1 ring-yellow-400/40 hover:bg-yellow-500/25">Weapons Shop</button>
         <button id="locker-btn" class="rounded-lg bg-sky-500/15 px-6 py-2 text-sm font-bold text-sky-300 ring-1 ring-sky-400/40 hover:bg-sky-500/25">Locker</button>
         <button id="textures-btn" class="rounded-lg bg-violet-500/15 px-6 py-2 text-sm font-bold text-violet-300 ring-1 ring-violet-400/40 hover:bg-violet-500/25">Texture Pack</button>
+        <button id="arcade-hub-btn" class="animate-pulse rounded-lg bg-cyan-500/20 px-6 py-2 text-sm font-black uppercase tracking-widest text-cyan-200 ring-2 ring-cyan-400/70 shadow-[0_0_22px_rgba(34,211,238,0.5)] hover:bg-cyan-500/35">🕹️ Arcade Hub</button>
         <button id="arcade-btn" class="animate-pulse rounded-lg bg-rose-500/20 px-6 py-2 text-sm font-black uppercase tracking-widest text-rose-200 ring-2 ring-rose-400/70 shadow-[0_0_22px_rgba(244,63,94,0.5)] hover:bg-rose-500/35">🕹️ Play Arcade: Crimson Highway</button>
         <button id="voidblast-btn" class="animate-pulse rounded-lg bg-fuchsia-500/20 px-6 py-2 text-sm font-black uppercase tracking-widest text-fuchsia-200 ring-2 ring-fuchsia-400/70 shadow-[0_0_22px_rgba(217,70,239,0.5)] hover:bg-fuchsia-500/35">🕹️ Play Arcade: Void Blast</button>
       </div>
@@ -1014,15 +1018,39 @@ for (const slot of ARSENAL_TABS) {
 
 // The arcade cabinet runs entirely on its own overlay loop; the campaign just
 // hands over the screen and picks up exactly where it left off.
-const arcade = mountArcade(() => {
-  show(menu, true)
-  playMusic('menu')
-})
+/** Cabinets opened from the hub hand the screen back to the hub, not the menu. */
+let cameFromHub = false
 
-const voidBlast = mountVoidBlast(() => {
+function leaveCabinet() {
+  if (cameFromHub) {
+    cameFromHub = false
+    arcadeHub.open()
+    return
+  }
   show(menu, true)
   playMusic('menu')
-})
+}
+
+const arcade = mountArcade(leaveCabinet)
+const voidBlast = mountVoidBlast(leaveCabinet)
+const gauntlet = mountEndlessGauntlet(leaveCabinet)
+
+const CABINETS: Record<ArcadeGameId, () => void> = {
+  'crimson-highway': () => arcade.open(),
+  'void-blast': () => voidBlast.open(),
+  'endless-gauntlet': () => gauntlet.open(),
+}
+
+const arcadeHub = mountArcadeHub(
+  (game) => {
+    cameFromHub = true
+    CABINETS[game]()
+  },
+  () => {
+    show(menu, true)
+    playMusic('menu')
+  },
+)
 
 function enterCabinet(openCabinet: () => void) {
   resumeAudio()
@@ -1033,6 +1061,7 @@ function enterCabinet(openCabinet: () => void) {
   openCabinet()
 }
 
+el('arcade-hub-btn').addEventListener('click', () => enterCabinet(() => arcadeHub.open()))
 el('arcade-btn').addEventListener('click', () => enterCabinet(() => arcade.open()))
 el('voidblast-btn').addEventListener('click', () => enterCabinet(() => voidBlast.open()))
 

@@ -4,6 +4,8 @@
  * and never touches the zombie shooter's state.
  */
 
+import { recordPlay } from './arcadeStats'
+
 const STORE_KEY = 'crimson-highway-highscore-v1'
 
 /** Logical resolution of the cabinet screen; the CSS box scales it to fit. */
@@ -474,6 +476,7 @@ export function mountArcade(onQuit: () => void): ArcadeCabinet {
   const start = () => {
     reset()
     phase = 'playing'
+    recordPlay('crimson-highway')
   }
 
   const onKeyDown = (e: KeyboardEvent) => {

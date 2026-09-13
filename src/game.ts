@@ -22,6 +22,7 @@ import { extractionField, flowDirection, goalField } from './nav'
 import type { FlowField } from './nav'
 import { drawCharacterSkin } from './skins'
 import { bindInput, clearInput, keysPressed } from './input'
+import { HazardManager, OIL_FRICTION_LOSS, OIL_SLIDE_TIME, buildHazards } from './HazardManager'
 
 export type GameState = 'menu' | 'playing' | 'won' | 'lost'
 
@@ -80,6 +81,11 @@ interface Player {
   charge: number
   /** Seconds left of a Cryo-Stalker freeze slam's movement slow. */
   chill: number
+  /** Seconds left of an oil slick's low-friction slide. */
+  slip: number
+  /** Carried velocity in units/second, which oil lets run away from the keys. */
+  driftX: number
+  driftY: number
 }
 
 /** One carried weapon and the ammo left in it. */
@@ -574,6 +580,8 @@ const CRATE_COLLECT_TIME = 1.2
 const CRATE_INTERACT_RANGE = 30
 /** Mud pits: everything wading through one moves at 55% pace. */
 const MUD_SLOW = 0.55
+/** How hard boots bite the ground, in 1/seconds; oil cuts into this. */
+const GROUND_GRIP = 34
 
 const MUTATION_SKINS: Record<MutationId, { body: string; trim: string }> = {
   'hyper-speed': { body: '#a855f7', trim: '#e9d5ff' },
@@ -806,6 +814,9 @@ export class Game {
   private mask: HTMLCanvasElement | null = null
   private generator: Generator | null = null
   private truck: Truck | null = null
+  private hazards: HazardManager | null = null
+  /** Seconds the current mission has been running, for hazard animation. */
+  private hazardClock = 0
   private hives: Hive[] = []
   private crates: Crate[] = []
   private crystals: Crystal[] = []
@@ -920,6 +931,9 @@ export class Game {
       recoil: 0,
       charge: 0,
       chill: 0,
+      slip: 0,
+      driftX: 0,
+      driftY: 0,
     }
   }
 
@@ -1043,6 +1057,8 @@ export class Game {
     this.mutationSkin = null
     this.mutationFade = 0
     this.zoom = 1
+    this.hazards = buildHazards(this.map, mission.chapter, mission.type)
+    this.hazardClock = 0
     this.runAndGunChecked = false
     this.reveal = mission.type === 'boss' ? 'pending' : 'off'
     this.revealTimer = 0
@@ -1423,6 +1439,7 @@ export class Game {
       this.updateWeapon(p, dt)
     }
     this.updateTruck(dt)
+    this.updateHazards(dt)
     this.updateBullets(dt)
     this.updateBoss(dt)
     this.updateVenom(dt)
@@ -1446,6 +1463,32 @@ export class Game {
     this.updateCamera()
     this.updateAmbience(dt)
     this.checkOutcome()
+  }
+
+  /**
+   * Rustlands oil slicks and industrial turrets. Both co-op players and every
+   * zombie are registered as beam targets, so the yard is hostile to all.
+   */
+  private updateHazards(dt: number) {
+    const h = this.hazards
+    if (!h) return
+    this.hazardClock += dt
+    h.update(dt, {
+      bodies: [
+        ...this.alivePlayers.map((p) => ({
+          body: p,
+          hurt: (amount: number) => {
+            p.hp -= amount
+            p.hurtCooldown = 0.2
+            p.safeTimer = 0
+          },
+        })),
+        ...this.enemies.map((z) => ({ body: z, hurt: (amount: number) => (z.hp -= amount) })),
+      ],
+    })
+    for (let i = this.enemies.length - 1; i >= 0; i--) {
+      if (this.enemies[i].hp <= 0) this.killEnemy(i)
+    }
   }
 
   /** True while the players are mounted in the rail mission's truck bed. */
@@ -2067,13 +2110,25 @@ export class Game {
     // rig drives itself and the whole stage is aim and trigger.
     const locked = this.railMode
     if (!locked) {
-      p.vx = move.x * step
-      p.vy = move.y * step
+      // Oil keeps a player coasting: the ground's grip on them is cut, so the
+      // keys only bend a heading they are already carrying.
+      if (this.hazards?.slippery(p.x, p.y, p.r)) p.slip = OIL_SLIDE_TIME
+      p.slip = Math.max(0, p.slip - dt)
+      const grip = GROUND_GRIP * (p.slip > 0 ? 1 - OIL_FRICTION_LOSS : 1)
+      const ease = Math.min(1, grip * dt)
+      const wantX = (move.x * step) / dt
+      const wantY = (move.y * step) / dt
+      p.driftX += (wantX - p.driftX) * ease
+      p.driftY += (wantY - p.driftY) * ease
+      p.vx = p.driftX * dt
+      p.vy = p.driftY * dt
       this.moveCircle(p, p.vx, p.vy)
       this.checkRunAndGun(p, k.shooting)
     } else {
       p.vx = 0
       p.vy = 0
+      p.driftX = 0
+      p.driftY = 0
     }
 
     // Locked in the bed, a held direction snaps the muzzle straight onto that
@@ -3565,6 +3620,7 @@ export class Game {
     this.drawFloor()
     this.drawMapLabel()
     for (const pit of m.mud ?? []) this.drawMud(pit)
+    this.hazards?.render(ctx, this.hazardClock)
     const mode = this.mission?.type
     if (mode === 'protect' || mode === 'race' || mode === 'rail') this.drawExtraction()
 
