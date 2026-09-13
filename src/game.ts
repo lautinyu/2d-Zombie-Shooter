@@ -29,6 +29,7 @@ import type { FlowField } from './nav'
 import { drawCharacterSkin } from './skins'
 import { bindInput, clearInput, keysPressed } from './input'
 import { settings } from './settings'
+import { AOE_TICK_COOLDOWN, AOE_TICK_DAMAGE, AoeTicker, aoeTickCount } from './aoe'
 import { HazardManager, OIL_FRICTION_LOSS, OIL_SLIDE_TIME, buildHazards } from './HazardManager'
 
 export type GameState = 'menu' | 'playing' | 'won' | 'lost'
@@ -166,6 +167,15 @@ interface FlameZone {
   warn: number
   /** Seconds of burning left once the warning expires. */
   burn: number
+  /** Keeps each player's burn inside the shared AoE damage budget. */
+  ticker: AoeTicker<Player>
+}
+
+/** Ticking AoE damage still owed to a player. */
+interface AoeBurn {
+  player: Player
+  ticksLeft: number
+  timer: number
 }
 
 /** An air-dropped crate collected by standing on it on 'supply' missions. */
@@ -234,6 +244,8 @@ interface AcidPool {
   r: number
   life: number
   maxLife: number
+  /** Keeps a puddle's burn inside the shared AoE damage budget. */
+  ticker: AoeTicker<Player>
 }
 
 export type MutationId = 'hyper-speed' | 'hardened' | 'toxic-blood'
@@ -473,6 +485,8 @@ export interface HudBoss {
   hp: number
   maxHp: number
   phase: 1 | 2
+  /** Phases this boss fights through, for the 'PHASE 1/2' readout. */
+  maxPhase: number
 }
 
 export interface HudMutation {
@@ -548,7 +562,6 @@ const MUTATION_SPEED = 1.25
 const MUTATION_ARMOUR = 0.7
 const ACID_LIFE = 7
 const ACID_RADIUS = 34
-const ACID_DPS = 16
 /** How fast a mutation skin fades in and back out again, in units per second. */
 const MUTATION_SKIN_FADE = 2.5
 /** How fast the hand kickback settles after a shot. */
@@ -723,7 +736,6 @@ const FLAME_ZONE_RADIUS = 135
 const FLAME_ZONE_SPREAD = 420
 const FLAME_WARNING_TIME = 1.5
 const FLAME_BURN_TIME = 2.6
-const FLAME_DPS = 34
 /**
  * Chapter 4 rail convoy. The rig rolls at a fixed pace, the players are
  * bolted into its bed and every equipped weapon cycles 1.5x faster.
@@ -750,6 +762,8 @@ const MATRON_RADIUS = 50
 const VENOM_SPEED = 210
 const VENOM_LIFE = 3
 const VENOM_DAMAGE = 6.5
+/** Every campaign boss escalates once, at half health. */
+const BOSS_PHASES = 2
 /** How close a player must get to the hive centre to trigger the reveal. */
 const BOSS_REVEAL_RANGE = 320
 const BOSS_REVEAL_TIME = 3.6
@@ -809,6 +823,8 @@ export class Game {
   private venom: Projectile[] = []
   private shards: Shard[] = []
   private shocks: Shock[] = []
+  /** Ticking AoE damage owed to players from slams and other bursts. */
+  private aoeBurns: AoeBurn[] = []
   private groanTimer = 2
   private barricades: Barricade[] = []
   /** Route field to the nearest player or survivor, rebuilt periodically. */
@@ -1057,6 +1073,7 @@ export class Game {
     this.venom = []
     this.shards = []
     this.shocks = []
+    this.aoeBurns = []
     this.gibs = []
     this.outro = 'off'
     this.outroTimer = 0
@@ -1403,6 +1420,7 @@ export class Game {
             hp: Math.max(0, Math.round(this.boss.hp)),
             maxHp: this.boss.maxHp,
             phase: this.boss.phase,
+            maxPhase: BOSS_PHASES,
           }
         : null,
       kills: this.kills,
@@ -1462,6 +1480,7 @@ export class Game {
     this.updateVenom(dt)
     this.updateShards(dt)
     this.updateShocks(dt)
+    this.updateAoeBurns(dt)
     this.updateSurvivors(dt)
     this.updateTurrets(dt)
     this.updateEnemies(dt)
@@ -1629,8 +1648,13 @@ export class Game {
         continue
       }
       for (const p of this.alivePlayers) {
-        if (Math.hypot(p.x - pool.x, p.y - pool.y) > pool.r + p.r) continue
-        p.hp -= ACID_DPS * dt
+        if (Math.hypot(p.x - pool.x, p.y - pool.y) > pool.r + p.r) {
+          pool.ticker.reset(p)
+          continue
+        }
+        const damage = pool.ticker.tick(p, dt)
+        if (!damage) continue
+        p.hp -= damage
         p.hurtCooldown = 0.25
         p.safeTimer = 0
       }
@@ -1987,6 +2011,7 @@ export class Game {
     this.venom = []
     this.shards = []
     this.shocks = []
+    this.aoeBurns = []
     this.boss = null
     clearInput()
     playSfx('explosion')
@@ -2735,7 +2760,14 @@ export class Game {
     // Cold-weather mutations are the only source of chips outside missions.
     if (this.mission?.chapter === 2) this.chipsEarned += CHIPS_PER_KILL
     if (this.mutation?.id === 'toxic-blood') {
-      this.acid.push({ x: z.x, y: z.y, r: ACID_RADIUS, life: ACID_LIFE, maxLife: ACID_LIFE })
+      this.acid.push({
+        x: z.x,
+        y: z.y,
+        r: ACID_RADIUS,
+        life: ACID_LIFE,
+        maxLife: ACID_LIFE,
+        ticker: new AoeTicker<Player>(),
+      })
     }
     const dropChance =
       this.mission?.type === 'boss' ? AMMO_DROP_CHANCE_BOSS : AMMO_DROP_CHANCE
@@ -3059,6 +3091,7 @@ export class Game {
         r: FLAME_ZONE_RADIUS,
         warn: FLAME_WARNING_TIME,
         burn: FLAME_BURN_TIME,
+        ticker: new AoeTicker<Player>(),
       })
     }
     this.shake = Math.max(this.shake, 0.7)
@@ -3080,8 +3113,13 @@ export class Game {
         continue
       }
       for (const p of this.alivePlayers) {
-        if (Math.hypot(p.x - z.x, p.y - z.y) > z.r + p.r) continue
-        p.hp -= FLAME_DPS * dt
+        if (Math.hypot(p.x - z.x, p.y - z.y) > z.r + p.r) {
+          z.ticker.reset(p)
+          continue
+        }
+        const damage = z.ticker.tick(p, dt)
+        if (!damage) continue
+        p.hp -= damage
         p.hurtCooldown = 0.25
         p.safeTimer = 0
       }
@@ -3120,12 +3158,43 @@ export class Game {
         if (w.hit.includes(p)) continue
         if (Math.hypot(p.x - w.x, p.y - w.y) > w.r) continue
         w.hit.push(p)
-        p.hp -= SLAM_DAMAGE
+        this.applyAoeDamage(p, SLAM_DAMAGE)
         p.chill = CHILL_TIME
         p.hurtCooldown = 0.2
         p.safeTimer = 0
       }
       if (w.r >= w.maxR) this.shocks.splice(i, 1)
+    }
+  }
+
+  /**
+   * Queues a one-shot AoE hit as spaced ticks instead of a single spike, so
+   * no slam can ever empty a health bar in a single frame.
+   */
+  private applyAoeDamage(p: Player, total: number) {
+    const ticks = aoeTickCount(total)
+    const existing = this.aoeBurns.find((b) => b.player === p)
+    if (existing) {
+      existing.ticksLeft = Math.max(existing.ticksLeft, ticks)
+      return
+    }
+    this.aoeBurns.push({ player: p, ticksLeft: ticks, timer: 0 })
+  }
+
+  private updateAoeBurns(dt: number) {
+    for (let i = this.aoeBurns.length - 1; i >= 0; i--) {
+      const burn = this.aoeBurns[i]
+      burn.timer -= dt
+      if (burn.player.down || burn.ticksLeft <= 0) {
+        this.aoeBurns.splice(i, 1)
+        continue
+      }
+      if (burn.timer > 0) continue
+      burn.ticksLeft -= 1
+      burn.timer = AOE_TICK_COOLDOWN
+      burn.player.hp -= AOE_TICK_DAMAGE
+      burn.player.hurtCooldown = 0.2
+      burn.player.safeTimer = 0
     }
   }
 

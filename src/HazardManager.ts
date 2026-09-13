@@ -8,13 +8,12 @@
 
 import type { GameMap } from './maps'
 import { circleHitsWall } from './maps'
+import { AoeTicker } from './aoe'
 
 /** Fraction of normal ground friction removed while standing in oil. */
 export const OIL_FRICTION_LOSS = 0.6
 /** Seconds a player keeps sliding after touching a slick. */
 export const OIL_SLIDE_TIME = 1.5
-/** Damage per second dealt by a turret beam to anything it crosses. */
-export const TURRET_BEAM_DPS = 10
 
 const TURRET_RANGE = 420
 const TURRET_SPIN = Math.PI * 0.55
@@ -36,6 +35,8 @@ export interface LaserTurret {
   range: number
   /** Live beam length after the raycast stops at the first wall. */
   beam: number
+  /** Per-body tick budget, reset when the beam sweeps off a body. */
+  ticker: AoeTicker<HazardBody>
 }
 
 /** Anything a hazard can touch: both players and zombies qualify. */
@@ -106,6 +107,7 @@ export class HazardManager {
         spin: TURRET_SPIN * (rng() < 0.5 ? -1 : 1),
         range: TURRET_RANGE,
         beam: TURRET_RANGE,
+        ticker: new AoeTicker<HazardBody>(),
       })
     }
   }
@@ -127,11 +129,16 @@ export class HazardManager {
       for (const entry of hooks.bodies) {
         const b = entry.body
         const along = (b.x - t.x) * ux + (b.y - t.y) * uy
-        if (along < 0 || along > t.beam) continue
         const px = t.x + ux * along
         const py = t.y + uy * along
-        if (Math.hypot(b.x - px, b.y - py) > b.r + BEAM_HALF_WIDTH) continue
-        entry.hurt(TURRET_BEAM_DPS * dt)
+        const lit =
+          along >= 0 && along <= t.beam && Math.hypot(b.x - px, b.y - py) <= b.r + BEAM_HALF_WIDTH
+        if (!lit) {
+          t.ticker.reset(b)
+          continue
+        }
+        const damage = t.ticker.tick(b, dt)
+        if (damage) entry.hurt(damage)
       }
     }
   }

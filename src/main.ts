@@ -129,9 +129,12 @@ app.innerHTML = `
     </div>
 
     <div id="boss-bar" class="absolute left-1/2 top-16 hidden w-[min(760px,80vw)] -translate-x-1/2">
-      <div class="flex items-baseline justify-between text-xs font-black uppercase tracking-widest">
-        <span id="boss-name" class="text-orange-300">The Hive Mother</span>
-        <span id="boss-phase" class="text-slate-300"></span>
+      <div class="flex items-baseline justify-between gap-6 text-xs font-black uppercase tracking-widest">
+        <span id="boss-name" class="min-w-0 flex-1 truncate text-orange-300">The Hive Mother</span>
+        <span class="flex shrink-0 flex-row items-baseline gap-4 whitespace-nowrap">
+          <span id="boss-phase" class="text-amber-300"></span>
+          <span id="boss-hp" class="font-mono text-slate-300"></span>
+        </span>
       </div>
       <div class="mt-1 h-5 w-full overflow-hidden rounded-md bg-black/70 ring-2 ring-orange-500/60">
         <div id="boss-fill" class="h-full w-full bg-gradient-to-r from-orange-500 to-red-600"></div>
@@ -1217,6 +1220,7 @@ const currentZone = el('current-zone')
 const bossBar = el('boss-bar')
 const bossName = el('boss-name')
 const bossPhase = el('boss-phase')
+const bossHp = el('boss-hp')
 const bossFill = el('boss-fill')
 const mutationBar = el('mutation-bar')
 const mutationTitle = el('mutation-title')
@@ -1420,8 +1424,11 @@ game.onHud = (h: Hud) => {
   bossBar.classList.toggle('hidden', !h.boss)
   if (h.boss) {
     const pct = (h.boss.hp / h.boss.maxHp) * 100
-    bossName.textContent = `${h.boss.name} · ${h.boss.title}`
-    bossPhase.textContent = `Phase ${h.boss.phase}${h.boss.phase === 2 ? ' · ENRAGED' : ''} — ${h.boss.hp}/${h.boss.maxHp}`
+    // One title only: the species label is dropped so nothing can stack up
+    // on top of the name when the bar is narrow.
+    bossName.textContent = h.boss.name.toUpperCase()
+    bossPhase.textContent = `PHASE ${h.boss.phase}/${h.boss.maxPhase}${h.boss.phase === 2 ? ' · ENRAGED' : ''}`
+    bossHp.textContent = `${h.boss.hp}/${h.boss.maxHp}`
     bossFill.style.width = `${pct}%`
     bossFill.className = `h-full ${
       h.boss.phase === 2 ? 'bg-gradient-to-r from-red-500 to-rose-700 animate-pulse' : 'bg-gradient-to-r from-orange-500 to-red-600'
