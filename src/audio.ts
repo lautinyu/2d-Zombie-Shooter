@@ -1,4 +1,5 @@
 import type { Weapon } from './weapons'
+import { onSettingsChange, settings } from './settings'
 
 interface SoundProfile {
   startFreq: number
@@ -66,6 +67,7 @@ const A2 = 110
 let context: AudioContext | null = null
 let master: GainNode | null = null
 let musicGain: GainNode | null = null
+let sfxGain: GainNode | null = null
 let musicTimer: number | null = null
 let currentTrack: MusicTrack | null = null
 /** Set on the first user gesture; a context built before that stays suspended. */
@@ -80,10 +82,19 @@ function ensureContext(): AudioContext | null {
   master.gain.value = 0.9
   master.connect(context.destination)
   musicGain = context.createGain()
-  musicGain.gain.value = 0.35
+  musicGain.gain.value = settings().bgmVolume
   musicGain.connect(master)
+  sfxGain = context.createGain()
+  sfxGain.gain.value = settings().sfxVolume
+  sfxGain.connect(master)
   return context
 }
+
+/** Slider moves land on the live buses, so volume changes are audible at once. */
+onSettingsChange((s) => {
+  if (musicGain) musicGain.gain.value = s.bgmVolume
+  if (sfxGain) sfxGain.gain.value = s.sfxVolume
+})
 
 /** Browsers hold the context suspended until the first gesture. */
 export function resumeAudio() {
@@ -107,16 +118,16 @@ function blip(profile: SoundProfile, destination: AudioNode, when: number, ctx: 
 
 export function playShot(weapon: Weapon) {
   const ctx = ensureContext()
-  if (!ctx || !master) return
+  if (!ctx || !sfxGain) return
   resumeAudio()
-  blip(PROFILES[weapon.id] ?? PROFILES['rusty-pistol'], master, ctx.currentTime, ctx)
+  blip(PROFILES[weapon.id] ?? PROFILES['rusty-pistol'], sfxGain, ctx.currentTime, ctx)
 }
 
 export function playSfx(id: SfxId) {
   const ctx = ensureContext()
-  if (!ctx || !master) return
+  if (!ctx || !sfxGain) return
   resumeAudio()
-  blip(SFX[id], master, ctx.currentTime, ctx)
+  blip(SFX[id], sfxGain, ctx.currentTime, ctx)
 }
 
 function noteFreq(semitones: number): number {

@@ -1,3 +1,6 @@
+import type { BindableAction, KeyBindings } from './settings'
+import { eventCode, settings } from './settings'
+
 /**
  * Persistent input state. Movement flags and the shooting flag are separate
  * fields that are only ever written by their own listener, so a mouse press
@@ -16,44 +19,34 @@ export const keysPressed = {
   right: false,
   // Mouse fire button, tracked independently of every key above.
   shooting: false,
-  // Player 2's own trigger: '.', Numpad 0 or the right Control key.
+  // Player 2's own trigger.
   shootingP2: false,
   // Held to collect supply crates; shared by both local players.
   interact: false,
-  // Per-player retrieve keys: E for player 1, M for player 2.
+  // Per-player retrieve keys, which ride along with the ability binding.
   interactP1: false,
   interactP2: false,
 }
 
 export type MovementKey = 'w' | 'a' | 's' | 'd' | 'up' | 'down' | 'left' | 'right'
 
-/** Maps both the layout key and the physical code onto a movement flag. */
-const MOVEMENT: Record<string, MovementKey> = {
-  w: 'w',
-  a: 'a',
-  s: 's',
-  d: 'd',
-  keyw: 'w',
-  keya: 'a',
-  keys: 's',
-  keyd: 'd',
-  arrowup: 'up',
-  arrowdown: 'down',
-  arrowleft: 'left',
-  arrowright: 'right',
+/** Player 1's movement flags, in binding order. */
+const P1_MOVEMENT: Record<'up' | 'down' | 'left' | 'right', MovementKey> = {
+  up: 'w',
+  down: 's',
+  left: 'a',
+  right: 'd',
 }
 
-const SCROLL_KEYS = ['arrowup', 'arrowdown', 'arrowleft', 'arrowright', ' ']
+const SCROLL_CODES = ['arrowup', 'arrowdown', 'arrowleft', 'arrowright', 'space']
 
-/** Player 2 holds any of these to fire without waiting on auto-aim. */
-function isP2Trigger(e: KeyboardEvent): boolean {
-  const code = e.code.toLowerCase()
-  return e.key === '.' || code === 'numpad0' || code === 'controlright'
-}
+/** Extra player 2 triggers kept alongside whatever shoot key is bound. */
+const P2_EXTRA_TRIGGERS = ['numpad0', 'controlright']
 
 /** One-shot key presses; movement is never routed through these. */
 export interface InputActions {
   reload: () => void
+  p2Reload: () => void
   p1Ability: () => void
   p2Ability: () => void
   p1Barricade: () => void
@@ -66,12 +59,18 @@ export interface InputActions {
   p2Shot: () => void
   /** Mouse position in canvas space, updated on every move and press. */
   aim: (x: number, y: number) => void
+  /** Right-click destination in canvas space, for click-to-move. */
+  walkTo: (x: number, y: number) => void
   /** Presses outside a live mission must not arm the trigger. */
   canShoot: () => boolean
 }
 
-function movementFlag(e: KeyboardEvent): MovementKey | undefined {
-  return MOVEMENT[e.key.toLowerCase()] ?? MOVEMENT[e.code.toLowerCase()]
+/** Which action, if any, this code is bound to for the given player. */
+function actionFor(bindings: KeyBindings, code: string): BindableAction | undefined {
+  for (const action of Object.keys(bindings) as BindableAction[]) {
+    if (bindings[action] === code) return action
+  }
+  return undefined
 }
 
 export function clearInput() {
@@ -81,80 +80,86 @@ export function clearInput() {
 }
 
 export function bindInput(canvas: HTMLCanvasElement, actions: InputActions) {
+  /** True while player 1 fires from a key rather than the mouse button. */
+  const keyFire = () => settings().fireBinding === 'key'
+
+  const isP2Trigger = (code: string) =>
+    code === settings().p2.shoot || P2_EXTRA_TRIGGERS.includes(code)
+
   window.addEventListener('keydown', (e) => {
-    const flag = movementFlag(e)
-    if (flag) {
-      keysPressed[flag] = true
-      // Only page scrolling is suppressed; the key state above is already set.
-      if (SCROLL_KEYS.includes(e.key.toLowerCase())) e.preventDefault()
-      return
-    }
-    const key = e.key.toLowerCase()
-    // Retrieve is a hold, so its flag is set before the repeat guard drops
-    // the auto-repeat events.
-    if (key === 'e') keysPressed.interactP1 = true
-    if (key === 'm') keysPressed.interactP2 = true
-    if (isP2Trigger(e)) keysPressed.shootingP2 = true
+    const code = eventCode(e)
+    const s = settings()
+    const p1 = actionFor(s.p1, code)
+    const p2 = actionFor(s.p2, code)
+
+    if (SCROLL_CODES.includes(code)) e.preventDefault()
+
+    // Held states are set before the repeat guard so auto-repeat cannot
+    // cancel a direction, a trigger or a retrieve that is being held down.
+    if (p1 && p1 in P1_MOVEMENT) keysPressed[P1_MOVEMENT[p1 as 'up' | 'down' | 'left' | 'right']] = true
+    if (p2 && p2 in P1_MOVEMENT) keysPressed[p2 as MovementKey] = true
+    if (p1 === 'ability') keysPressed.interactP1 = true
+    if (p2 === 'ability') keysPressed.interactP2 = true
+    if (p1 === 'shoot' && keyFire()) keysPressed.shooting = true
+    if (isP2Trigger(code)) keysPressed.shootingP2 = true
+    if (code === 'space') keysPressed.interact = true
+
     if (e.repeat) return
-    if (isP2Trigger(e)) actions.p2Shot()
-    switch (key) {
-      case 'r':
-        actions.reload()
-        break
-      case 'e':
-        actions.p1Ability()
-        break
-      case 'm':
-        actions.p2Ability()
-        break
-      case 'q':
-        actions.p1Switch()
-        break
-      case 'n':
-        actions.p2Switch()
-        break
-      case 'f':
-        actions.p1Barricade()
-        break
-      case 'l':
-        actions.p2Barricade()
-        break
-      case ' ':
-        keysPressed.interact = true
-        e.preventDefault()
-        break
-    }
+    if (p1 === 'shoot' && keyFire()) actions.p1Shot()
+    if (isP2Trigger(code)) actions.p2Shot()
+    if (p1 === 'reload') actions.reload()
+    if (p1 === 'ability') actions.p1Ability()
+    if (p1 === 'swap') actions.p1Switch()
+    if (p2 === 'reload') actions.p2Reload()
+    if (p2 === 'ability') actions.p2Ability()
+    if (p2 === 'swap') actions.p2Switch()
+    if (code === 'keyf') actions.p1Barricade()
+    if (code === 'keyl') actions.p2Barricade()
   })
 
   window.addEventListener('keyup', (e) => {
-    const flag = movementFlag(e)
-    if (flag) keysPressed[flag] = false
-    const key = e.key.toLowerCase()
-    if (key === ' ') keysPressed.interact = false
-    if (key === 'e') keysPressed.interactP1 = false
-    if (key === 'm') keysPressed.interactP2 = false
-    if (isP2Trigger(e)) keysPressed.shootingP2 = false
+    const code = eventCode(e)
+    const s = settings()
+    const p1 = actionFor(s.p1, code)
+    const p2 = actionFor(s.p2, code)
+    if (p1 && p1 in P1_MOVEMENT) keysPressed[P1_MOVEMENT[p1 as 'up' | 'down' | 'left' | 'right']] = false
+    if (p2 && p2 in P1_MOVEMENT) keysPressed[p2 as MovementKey] = false
+    if (p1 === 'ability') keysPressed.interactP1 = false
+    if (p2 === 'ability') keysPressed.interactP2 = false
+    if (p1 === 'shoot') keysPressed.shooting = false
+    if (isP2Trigger(code)) keysPressed.shootingP2 = false
+    if (code === 'space') keysPressed.interact = false
   })
 
   // A window that loses focus stops receiving keyup, so drop everything.
   window.addEventListener('blur', clearInput)
 
-  const aimAt = (e: MouseEvent | PointerEvent) => {
+  const canvasPoint = (e: MouseEvent | PointerEvent) => {
     const rect = canvas.getBoundingClientRect()
-    actions.aim(e.clientX - rect.left, e.clientY - rect.top)
+    return { x: e.clientX - rect.left, y: e.clientY - rect.top }
+  }
+  const aimAt = (e: MouseEvent | PointerEvent) => {
+    const point = canvasPoint(e)
+    actions.aim(point.x, point.y)
   }
   window.addEventListener('mousemove', aimAt)
   window.addEventListener('pointerdown', (e) => {
+    if (e.button === 2 && settings().movementMode === 'click') {
+      const point = canvasPoint(e)
+      actions.walkTo(point.x, point.y)
+      return
+    }
     if (e.button !== 0 || !actions.canShoot()) return
     aimAt(e)
+    if (keyFire()) return
     keysPressed.shooting = true
     actions.p1Shot()
   })
   window.addEventListener('pointerup', (e) => {
-    if (e.button === 0) keysPressed.shooting = false
+    if (e.button === 0 && !keyFire()) keysPressed.shooting = false
   })
   window.addEventListener('pointercancel', () => {
-    keysPressed.shooting = false
+    if (!keyFire()) keysPressed.shooting = false
   })
   // Canvas drags and text selection make Chrome swallow keydown while the
   // button is held, which looks exactly like frozen movement.

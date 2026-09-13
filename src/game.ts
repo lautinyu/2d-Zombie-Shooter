@@ -28,6 +28,7 @@ import { extractionField, flowDirection, goalField } from './nav'
 import type { FlowField } from './nav'
 import { drawCharacterSkin } from './skins'
 import { bindInput, clearInput, keysPressed } from './input'
+import { settings } from './settings'
 import { HazardManager, OIL_FRICTION_LOSS, OIL_SLIDE_TIME, buildHazards } from './HazardManager'
 
 export type GameState = 'menu' | 'playing' | 'won' | 'lost'
@@ -618,6 +619,8 @@ const SURVIVOR_AGGRO_BIAS = 0.75
 const COOP_CAMERA_MARGIN = 420
 const MIN_ZOOM = 0.5
 const P2_AUTO_FIRE_RANGE = 620
+/** Click-to-move drops the order once the walker is this close. */
+const WALK_ARRIVE_RANGE = 14
 /** Radians per second player 2's muzzle sweeps while tracking a target. */
 const P2_TURN_RATE = 11
 const TURRET_RANGE = 460
@@ -848,6 +851,8 @@ export class Game {
   private runAndGunChecked = false
   private mouseWorld = { x: 0, y: 0 }
   private mouseScreen = { x: 0, y: 0 }
+  /** Click-to-move destination for player 1, in world space. */
+  private walkTarget: { x: number; y: number } | null = null
 
   /**
    * Boss reveal cinematic. 'pending' keeps the Hive Mother dormant until a
@@ -970,6 +975,7 @@ export class Game {
   private bindInput() {
     bindInput(this.canvas, {
       reload: () => this.startReload(this.p1),
+      p2Reload: () => this.startReload(this.players[1]),
       p1Ability: () => this.useAbility(this.p1),
       p2Ability: () => this.useAbility(this.players[1]),
       p1Barricade: () => this.deployBarricade(this.p1),
@@ -986,6 +992,9 @@ export class Game {
       aim: (x, y) => {
         this.mouseScreen.x = x
         this.mouseScreen.y = y
+      },
+      walkTo: (x, y) => {
+        this.walkTarget = { x: x / this.zoom + this.camera.x, y: y / this.zoom + this.camera.y }
       },
       canShoot: () => this.state === 'playing' && Boolean(this.p1),
     })
@@ -2238,6 +2247,23 @@ export class Game {
     const solo = this.players.length === 1
     let dx = 0
     let dy = 0
+    if (p.id === 1 && settings().movementMode === 'click') {
+      // Click-to-move: walk the straight line to the last right-clicked
+      // point, and drop the order once it is reached or a key is touched.
+      const target = this.walkTarget
+      const keyed = k.w || k.a || k.s || k.d
+      if (keyed) this.walkTarget = null
+      if (target && !keyed) {
+        const tx = target.x - p.x
+        const ty = target.y - p.y
+        const len = Math.hypot(tx, ty)
+        if (len < WALK_ARRIVE_RANGE) {
+          this.walkTarget = null
+          return { x: 0, y: 0 }
+        }
+        return { x: tx / len, y: ty / len }
+      }
+    }
     if (p.id === 1) {
       if (k.w || (solo && k.up)) dy -= 1
       if (k.s || (solo && k.down)) dy += 1

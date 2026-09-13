@@ -43,6 +43,7 @@ import { mountArcade } from './arcade'
 import { mountVoidBlast } from './voidblast'
 import { mountEndlessGauntlet } from './EndlessGauntlet'
 import { mountArcadeHub } from './ArcadeHubScene'
+import { mountSettings } from './SettingsModal'
 import type { ArcadeGameId } from './arcadeStats'
 
 declare global {
@@ -175,6 +176,7 @@ app.innerHTML = `
           <button id="locker-btn" class="rounded-lg bg-sky-500/15 px-6 py-2 text-sm font-bold text-sky-300 ring-1 ring-sky-400/40 hover:bg-sky-500/25">Locker</button>
           <button id="textures-btn" class="rounded-lg bg-violet-500/15 px-6 py-2 text-sm font-bold text-violet-300 ring-1 ring-violet-400/40 hover:bg-violet-500/25">Texture Pack</button>
           <button id="arcade-hub-btn" class="animate-pulse rounded-lg bg-cyan-500/20 px-6 py-2 text-sm font-black uppercase tracking-widest text-cyan-200 ring-2 ring-cyan-400/70 shadow-[0_0_22px_rgba(34,211,238,0.5)] hover:bg-cyan-500/35">🕹️ Arcade Hub</button>
+          <button id="settings-btn" class="rounded-lg bg-slate-500/15 px-6 py-2 text-sm font-bold text-slate-200 ring-1 ring-slate-400/40 hover:bg-slate-500/25">⚙️ Settings</button>
         </nav>
       </div>
     </header>
@@ -1066,6 +1068,12 @@ function enterCabinet(openCabinet: () => void) {
 }
 
 el('arcade-hub-btn').addEventListener('click', () => enterCabinet(() => arcadeHub.open()))
+
+const settingsPanel = mountSettings()
+el('settings-btn').addEventListener('click', () => {
+  resumeAudio()
+  settingsPanel.open()
+})
 
 el('shop-btn').addEventListener('click', () => openArsenal('shop'))
 el('locker-btn').addEventListener('click', () => openArsenal('locker'))
