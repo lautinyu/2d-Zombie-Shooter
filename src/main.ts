@@ -89,63 +89,67 @@ app.innerHTML = `
       </div>
     </div>
 
-    <div class="absolute left-1/2 top-5 -translate-x-1/2 rounded-md bg-black/50 px-3 py-1 text-xs uppercase tracking-widest text-slate-300">
-      <span id="current-zone">The Streets</span>
-    </div>
+    <!--
+      Every centred readout lives in this one column: siblings stack in flow
+      instead of fighting over the same absolute slot, so nothing can overlap.
+    -->
+    <div class="absolute left-1/2 top-4 z-40 flex w-3/4 max-w-2xl -translate-x-1/2 flex-col items-center gap-2 [isolation:isolate]">
+      <div class="rounded-md bg-black/50 px-3 py-1 text-xs uppercase tracking-widest text-slate-300">
+        <span id="current-zone">The Streets</span>
+      </div>
 
-    <div id="hold-timer" class="absolute left-1/2 top-16 hidden -translate-x-1/2 rounded-xl bg-black/70 px-8 py-2 text-center ring-2 ring-cyan-400/60">
-      <div class="text-[11px] font-black uppercase tracking-[0.3em] text-cyan-300">Hold the Line</div>
-      <div id="hold-clock" class="font-mono text-5xl font-black text-white">2:00</div>
-    </div>
+      <div id="hold-timer" class="hidden rounded-xl bg-black/70 px-8 py-2 text-center ring-2 ring-cyan-400/60">
+        <div class="text-[11px] font-black uppercase tracking-[0.3em] text-cyan-300">Hold the Line</div>
+        <div id="hold-clock" class="font-mono text-5xl font-black text-white">2:00</div>
+      </div>
 
-    <div id="generator-bar" class="absolute left-1/2 top-16 hidden w-[min(560px,80vw)] -translate-x-1/2">
-      <div class="flex items-baseline justify-between text-xs font-black uppercase tracking-widest">
-        <span class="text-cyan-300">Generator</span>
-        <span id="generator-text" class="text-slate-300"></span>
+      <div id="generator-bar" class="hidden w-full">
+        <div class="flex items-baseline justify-between text-xs font-black uppercase tracking-widest">
+          <span class="text-cyan-300">Generator</span>
+          <span id="generator-text" class="text-slate-300"></span>
+        </div>
+        <div class="mt-1 h-4 w-full overflow-hidden rounded-md bg-black/70 ring-2 ring-cyan-500/60">
+          <div id="generator-fill" class="h-full w-full bg-gradient-to-r from-cyan-400 to-sky-600"></div>
+        </div>
       </div>
-      <div class="mt-1 h-4 w-full overflow-hidden rounded-md bg-black/70 ring-2 ring-cyan-500/60">
-        <div id="generator-fill" class="h-full w-full bg-gradient-to-r from-cyan-400 to-sky-600"></div>
-      </div>
-    </div>
 
-    <div id="truck-bar" class="absolute left-1/2 top-16 hidden w-[min(620px,84vw)] -translate-x-1/2">
-      <div class="flex items-baseline justify-between text-xs font-black uppercase tracking-widest">
-        <span class="text-orange-300">TRUCK INTEGRITY</span>
-        <span id="truck-text" class="text-slate-300"></span>
+      <div id="truck-bar" class="hidden w-full">
+        <div class="flex items-baseline justify-between text-xs font-black uppercase tracking-widest">
+          <span class="text-orange-300">TRUCK INTEGRITY</span>
+          <span id="truck-text" class="text-slate-300"></span>
+        </div>
+        <div class="mt-1 h-5 w-full overflow-hidden rounded-md bg-black/70 ring-2 ring-orange-500/60">
+          <div id="truck-fill" class="h-full w-full bg-gradient-to-r from-amber-400 to-orange-600"></div>
+        </div>
       </div>
-      <div class="mt-1 h-5 w-full overflow-hidden rounded-md bg-black/70 ring-2 ring-orange-500/60">
-        <div id="truck-fill" class="h-full w-full bg-gradient-to-r from-amber-400 to-orange-600"></div>
-      </div>
-    </div>
 
-    <div id="jungle-bar" class="absolute left-1/2 top-16 hidden w-[min(560px,80vw)] -translate-x-1/2">
-      <div class="flex items-baseline justify-between text-xs font-black uppercase tracking-widest">
-        <span id="jungle-label" class="text-lime-300">Objective</span>
-        <span id="jungle-text" class="text-slate-300"></span>
-      </div>
-      <div class="mt-1 h-4 w-full overflow-hidden rounded-md bg-black/70 ring-2 ring-lime-500/60">
-        <div id="jungle-fill" class="h-full w-0 bg-gradient-to-r from-lime-400 to-emerald-600"></div>
-      </div>
-    </div>
-
-    <div id="boss-bar" class="absolute left-1/2 top-16 hidden w-[min(760px,80vw)] -translate-x-1/2">
-      <div class="flex items-baseline justify-between gap-6 text-xs font-black uppercase tracking-widest">
-        <span id="boss-name" class="min-w-0 flex-1 truncate text-orange-300">The Hive Mother</span>
-        <span class="flex shrink-0 flex-row items-baseline gap-4 whitespace-nowrap">
+      <div id="boss-bar" class="hidden w-full flex-col [isolation:isolate]">
+        <div id="boss-name" class="w-full truncate text-center text-xl font-bold uppercase tracking-wider text-orange-300 drop-shadow-[0_2px_3px_rgba(0,0,0,0.9)]">The Hive Mother</div>
+        <div class="mt-1 h-6 w-full overflow-hidden rounded border-2 border-red-800 bg-gray-900">
+          <div id="boss-fill" class="h-full w-full bg-gradient-to-r from-orange-500 to-red-600"></div>
+        </div>
+        <div class="mt-1 flex justify-between font-mono text-sm">
           <span id="boss-phase" class="text-amber-300"></span>
-          <span id="boss-hp" class="font-mono text-slate-300"></span>
-        </span>
+          <span id="boss-hp" class="text-slate-300"></span>
+        </div>
       </div>
-      <div class="mt-1 h-5 w-full overflow-hidden rounded-md bg-black/70 ring-2 ring-orange-500/60">
-        <div id="boss-fill" class="h-full w-full bg-gradient-to-r from-orange-500 to-red-600"></div>
-      </div>
-    </div>
 
-    <div id="mutation-bar" class="absolute left-1/2 top-28 hidden w-[min(560px,80vw)] -translate-x-1/2 rounded-md bg-black/70 px-4 py-2 text-center ring-2 ring-lime-500/60">
-      <div id="mutation-title" class="text-sm font-black uppercase tracking-widest text-lime-300"></div>
-      <div id="mutation-blurb" class="mt-0.5 text-[11px] text-slate-300"></div>
-      <div class="mt-1 h-1.5 w-full overflow-hidden rounded bg-black/70">
-        <div id="mutation-fill" class="h-full w-full bg-lime-400"></div>
+      <div id="jungle-bar" class="hidden w-full">
+        <div class="flex items-baseline justify-between text-xs font-black uppercase tracking-widest">
+          <span id="jungle-label" class="text-lime-300">Objective</span>
+          <span id="jungle-text" class="text-slate-300"></span>
+        </div>
+        <div class="mt-1 h-4 w-full overflow-hidden rounded-md bg-black/70 ring-2 ring-lime-500/60">
+          <div id="jungle-fill" class="h-full w-0 bg-gradient-to-r from-lime-400 to-emerald-600"></div>
+        </div>
+      </div>
+
+      <div id="mutation-bar" class="hidden w-full rounded-md bg-black/70 px-4 py-2 text-center ring-2 ring-lime-500/60">
+        <div id="mutation-title" class="text-sm font-black uppercase tracking-widest text-lime-300"></div>
+        <div id="mutation-blurb" class="mt-0.5 text-[11px] text-slate-300"></div>
+        <div class="mt-1 h-1.5 w-full overflow-hidden rounded bg-black/70">
+          <div id="mutation-fill" class="h-full w-full bg-lime-400"></div>
+        </div>
       </div>
     </div>
 
@@ -1411,9 +1415,6 @@ game.onHud = (h: Hud) => {
           : 'bg-gradient-to-r from-red-500 to-rose-700 animate-pulse'
     }`
   }
-  // The convoy bar owns the top slot, so the objective readout drops below it.
-  jungleBar.style.top = h.truck ? '7rem' : ''
-
   jungleBar.classList.toggle('hidden', !h.jungle)
   if (h.jungle) {
     jungleLabel.textContent = h.jungle.label
@@ -1424,8 +1425,7 @@ game.onHud = (h: Hud) => {
   bossBar.classList.toggle('hidden', !h.boss)
   if (h.boss) {
     const pct = (h.boss.hp / h.boss.maxHp) * 100
-    // One title only: the species label is dropped so nothing can stack up
-    // on top of the name when the bar is narrow.
+    // The name belongs to this node alone; every other readout is numeric.
     bossName.textContent = h.boss.name.toUpperCase()
     bossPhase.textContent = `PHASE ${h.boss.phase}/${h.boss.maxPhase}${h.boss.phase === 2 ? ' · ENRAGED' : ''}`
     bossHp.textContent = `${h.boss.hp}/${h.boss.maxHp}`
@@ -1448,7 +1448,7 @@ game.onHud = (h: Hud) => {
     missionBar.style.width = `${total ? (h.extracted / total) * 100 : 0}%`
   } else {
     killText.textContent = h.boss
-      ? `${h.boss.name}: ${Math.round((h.boss.hp / h.boss.maxHp) * 100)}%`
+      ? `Boss: ${Math.round((h.boss.hp / h.boss.maxHp) * 100)}%`
       : `Zombies Cleared: ${h.kills}/${h.target}`
     missionBar.style.width = h.boss
       ? `${100 - (h.boss.hp / h.boss.maxHp) * 100}%`
