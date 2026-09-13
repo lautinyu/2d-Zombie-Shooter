@@ -161,25 +161,28 @@ app.innerHTML = `
   </div>
 
   <!-- Main menu -->
-  <div id="menu" class="absolute inset-0 h-screen max-h-screen flex-col items-center overflow-y-auto bg-slate-950/95 px-6 pb-10 pt-6">
-    <div class="w-full max-w-4xl">
-      <div class="sticky top-0 z-10 -mx-6 bg-slate-950/95 px-6 pb-3 pt-1 backdrop-blur">
-        <h1 class="text-center text-5xl font-black tracking-tight text-emerald-400 drop-shadow">ZOMBIE SHOOTER</h1>
-        <p class="mt-2 text-center text-sm text-slate-400">Top-down survival · pick a mission, clear the zone, get out alive.</p>
-        <div class="mt-4 text-center text-sm font-bold text-yellow-300">Scrap: <span id="menu-scrap">0</span>
+  <div id="menu" class="absolute inset-0 h-screen max-h-screen flex-col overflow-hidden bg-slate-950/95">
+    <header class="sticky top-0 z-50 shrink-0 border-b border-white/10 bg-slate-950/90 px-6 pb-3 pt-4 backdrop-blur-md">
+      <div class="mx-auto w-full max-w-4xl">
+        <h1 class="text-center text-4xl font-black tracking-tight text-emerald-400 drop-shadow">ZOMBIE SHOOTER</h1>
+        <div class="mt-2 text-center text-sm font-bold text-yellow-300">Scrap: <span id="menu-scrap">0</span>
           <span class="ml-3 text-cyan-300">Frozen Data Chips: <span id="menu-chips">0</span></span>
           <span class="ml-3 text-amber-400">Ancient Amber: <span id="menu-amber">0</span></span>
           <span class="ml-3 text-orange-400">Rust Cores: <span id="menu-cores">0</span></span>
         </div>
+        <nav class="mt-3 flex flex-wrap justify-center gap-3">
+          <button id="shop-btn" class="rounded-lg bg-yellow-500/15 px-6 py-2 text-sm font-bold text-yellow-300 ring-1 ring-yellow-400/40 hover:bg-yellow-500/25">Weapons Shop</button>
+          <button id="locker-btn" class="rounded-lg bg-sky-500/15 px-6 py-2 text-sm font-bold text-sky-300 ring-1 ring-sky-400/40 hover:bg-sky-500/25">Locker</button>
+          <button id="textures-btn" class="rounded-lg bg-violet-500/15 px-6 py-2 text-sm font-bold text-violet-300 ring-1 ring-violet-400/40 hover:bg-violet-500/25">Texture Pack</button>
+          <button id="arcade-hub-btn" class="animate-pulse rounded-lg bg-cyan-500/20 px-6 py-2 text-sm font-black uppercase tracking-widest text-cyan-200 ring-2 ring-cyan-400/70 shadow-[0_0_22px_rgba(34,211,238,0.5)] hover:bg-cyan-500/35">🕹️ Arcade Hub</button>
+        </nav>
       </div>
-      <div class="mt-5 flex justify-center">
+    </header>
+    <div class="min-h-0 flex-1 overflow-y-auto px-6 pb-10 pt-4">
+      <div class="mx-auto w-full max-w-4xl">
+        <p class="text-center text-sm text-slate-400">Top-down survival · pick a mission, clear the zone, get out alive.</p>
+      <div class="mt-4 flex justify-center">
         <button id="start-btn" class="rounded-xl bg-emerald-500 px-10 py-3 text-lg font-black tracking-wide text-emerald-950 hover:bg-emerald-400">Start Game</button>
-      </div>
-      <div class="mt-4 flex flex-wrap justify-center gap-3">
-        <button id="shop-btn" class="rounded-lg bg-yellow-500/15 px-6 py-2 text-sm font-bold text-yellow-300 ring-1 ring-yellow-400/40 hover:bg-yellow-500/25">Weapons Shop</button>
-        <button id="locker-btn" class="rounded-lg bg-sky-500/15 px-6 py-2 text-sm font-bold text-sky-300 ring-1 ring-sky-400/40 hover:bg-sky-500/25">Locker</button>
-        <button id="textures-btn" class="rounded-lg bg-violet-500/15 px-6 py-2 text-sm font-bold text-violet-300 ring-1 ring-violet-400/40 hover:bg-violet-500/25">Texture Pack</button>
-        <button id="arcade-hub-btn" class="animate-pulse rounded-lg bg-cyan-500/20 px-6 py-2 text-sm font-black uppercase tracking-widest text-cyan-200 ring-2 ring-cyan-400/70 shadow-[0_0_22px_rgba(34,211,238,0.5)] hover:bg-cyan-500/35">🕹️ Arcade Hub</button>
       </div>
       <div class="mt-4 flex items-center justify-center gap-2 text-xs">
         <span class="font-semibold uppercase tracking-wider text-slate-400">Players</span>
@@ -200,6 +203,7 @@ app.innerHTML = `
         Each mission loads its own isolated map. Yellow crates restock ammo.
         <span class="font-semibold text-orange-300">Orange Plague Bugs</span> are fast and sting — five stings and you turn.
         <div class="mt-2"><span class="font-semibold text-slate-200">Co-op:</span> Player 2 moves with the Arrow keys, auto-aims at the nearest enemy and fires on its own or with the <span class="font-mono text-slate-200">.</span> key. Their ability is <span class="font-mono text-slate-200">M</span> (barricade <span class="font-mono text-slate-200">L</span>), and <span class="font-mono text-slate-200">N</span> swaps their weapon.</div>
+      </div>
       </div>
     </div>
   </div>
